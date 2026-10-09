@@ -1,0 +1,42 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>ECODE check</title></head>
+<body>
+<pre id="out">running…</pre>
+<script src="js/frame.js"></script>
+<script src="js/scenarios.js"></script>
+<script>
+(async function () {
+  var F = window.DbgFrame, S = window.DbgScenarios, lines = [];
+  lines.push('RESULT ECODE.PARAM=' + F.ECODE.PARAM);
+  lines.push('RESULT ECODE_NAMES[6]=' + F.ECODE_NAMES[6]);
+  lines.push('RESULT errCodeName(6)=' + F.errCodeName(6));
+
+  function mk() { var r = []; return { ch: new S.Checks(function (x) { r.push(x); }), r: r }; }
+  function rej(code) { return function () { return Promise.reject(new F.BridgeError('ERR', code)); }; }
+
+  /* 复刻 smoke / nv / config 中原本 FAIL 的 4 处断言（设备实际返回 0x06 PARAM） */
+  var a = mk();
+  await a.ch.errIs(F.ECODE.PARAM, rej(0x06), 'SET_PROFILE 越界 → ERR(PARAM)');
+  lines.push('RESULT smoke.setProfile   ok=' + a.r[0].ok + ' detail=' + a.r[0].detail);
+
+  var b = mk();
+  await b.ch.errIs(F.ECODE.PARAM, rej(0x06), 'SET_TEST_MODE 非法模式 → ERR(PARAM)');
+  lines.push('RESULT smoke.setTestMode  ok=' + b.r[0].ok + ' detail=' + b.r[0].detail);
+
+  var c1 = mk();
+  await c1.ch.errIs(F.ECODE.PARAM, rej(0x06), 'NV[62] 越界 → ERR(PARAM)');
+  lines.push('RESULT nv.nvRead62        ok=' + c1.r[0].ok + ' detail=' + c1.r[0].detail);
+
+  var d = mk();
+  await d.ch.errIs(F.ECODE.PARAM, rej(0x06), '未知配置键 → ERR(PARAM)');
+  lines.push('RESULT config.setConfig   ok=' + d.r[0].ok + ' detail=' + d.r[0].detail);
+
+  /* 反向对照：返回 ERR(STATE=0x07) 必须仍判 FAIL，证明断言未被弱化 */
+  var e = mk();
+  await e.ch.errIs(F.ECODE.PARAM, rej(0x07), '对照：期望 PARAM 实得 STATE');
+  lines.push('RESULT CONTROL mismatched ok=' + e.r[0].ok + ' detail=' + e.r[0].detail);
+
+  document.getElementById('out').textContent = lines.join('\n');
+})();
+</script>
+</body></html>

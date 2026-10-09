@@ -1,0 +1,104 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>VIA probe</title></head>
+<body>
+<pre id="out">running…</pre>
+<script src="js/via_test.js"></script>
+<script>
+(async function () {
+  var V = window.DbgVia;
+  var lines = [];
+  function P(s) { lines.push(s); document.getElementById('out').textContent = lines.join('\n'); }
+  function beacon(tag, data) {
+    P('BEACON ' + tag + ' ' + data);
+    try {
+      new Image().src = 'http://127.0.0.1:9999/r?tag=' + encodeURIComponent(tag) +
+        '&d=' + encodeURIComponent(data) + '&t=' + Date.now();
+    } catch (e) {}
+  }
+  function sleep(ms) { return new Promise(function (s) { setTimeout(s, ms); }); }
+
+  if (!V) { beacon('BOOT', 'ERR no DbgVia'); return; }
+  if (!navigator.hid) { beacon('BOOT', 'ERR no WebHID'); return; }
+
+  /* 0) 枚举所有已授权 HID 设备 + 其 collections，看看有没有 BLE HOGP vendor 集合 */
+  var devs = [];
+  try { devs = await navigator.hid.getDevices(); }
+  catch (e) { beacon('BOOT', 'ERR getDevices ' + e.message); return; }
+  beacon('N', 'n=' + devs.length);
+  devs.forEach(function (d, i) {
+    var cols = (d.collections || []).map(function (c) {
+      return (c.usagePage || 0).toString(16) + ':' + (c.usage || 0).toString(16);
+    }).join(',');
+    beacon('DEV' + i, (d.productName || '?') + ' v' + d.vendorId.toString(16) +
+      ' p' + d.productId.toString(16) + ' open=' + d.opened + ' cols=[' + cols + ']');
+  });
+
+  var cand = devs.filter(function (d) {
+    return (d.collections || []).some(function (c) { return c.usagePage === 0xFF60; });
+  });
+  if (!cand.length) { beacon('BOOT', 'ERR no 0xFF60 device'); return; }
+  var dev = cand[0];
+  beacon('PICK', (dev.productName || '?') + ' v' + dev.vendorId.toString(16) +
+    ' p' + dev.productId.toString(16) + ' opened=' + dev.opened);
+  if (!dev.opened) { await dev.open(); }
+
+  /* 监听窗口内所有 inputreport（不限于 RID0/32B） */
+  var t0 = Date.now();
+  var inCount = 0;
+  function onIn(e) {
+    inCount++;
+    var u8 = new Uint8Array(e.data.buffer, e.data.byteOffset, e.data.byteLength);
+    beacon('IN', '#' + inCount + ' +' + (Date.now() - t0) + 'ms rid=' + e.reportId +
+      ' len=' + u8.length + ' ' + V.hex(u8));
+  }
+  dev.addEventListener('inputreport', onIn);
+
+  var t = new V.ViaHid({ log: function (lv, m) { P('[' + lv + '] ' + m); } });
+  await t.open(dev);
+
+  function diagStr(g) {
+    if (!g.parsed || !g.parsed.ok) { return 'bad=' + (g.parsed ? g.parsed.detail : '?'); }
+    var p = g.parsed, c = p.counters;
+    return 'mode=' + p.mode + ' up=' + p.up + ' conn=' + p.conn + ' bound=' + p.bound +
+      ' txBusy=' + p.txBusy + ' txQ=' + p.txQ + ' hbMiss=' + p.hbMiss + ' period=' + p.periodMs +
+      ' | subOk=' + c.txSubmitOk + ' subFail=' + c.txSubmitFail +
+      ' doneOk=' + c.txDoneOk + ' doneFail=' + c.txDoneFail + ' drop=' + c.txDrop +
+      ' rxAny=' + c.rxAny + ' rxPair=' + c.rxPair + ' rxBad=' + c.rxDataBad;
+  }
+
+  /* 1) OTA S0（本地应答，确认传输层可用） */
+  var s0 = null;
+  try { s0 = await t.otaGetInfo(800, 1); beacon('S0', diagStr(s0)); }
+  catch (e) { beacon('S0', 'ERR ' + e.name); }
+
+  /* 2) 连发 3 发忠实 VIA 自检（走 t.request，与 web 页面一致） */
+  for (var i = 1; i <= 3; i++) {
+    try {
+      var r = await V.roundTrip(t, { timeoutMs: 900, retries: 0 });
+      beacon('RT' + i, 'ok=' + r.ok + ' ms=' + r.elapsedMs + ' rx=' + V.hex(r.rx));
+    } catch (e) { beacon('RT' + i, 'ERR ' + e.name); }
+    await sleep(600);
+  }
+
+  /* 3) OTA S1（差分） */
+  var s1 = null;
+  try { s1 = await t.otaGetInfo(800, 1); beacon('S1', diagStr(s1)); }
+  catch (e) { beacon('S1', 'ERR ' + e.name); }
+
+  if (s0 && s0.parsed && s0.parsed.ok && s1 && s1.parsed && s1.parsed.ok) {
+    var a = s0.parsed.counters, b = s1.parsed.counters;
+    beacon('DIFF', 'subOk=' + (b.txSubmitOk - a.txSubmitOk) + ' subFail=' + (b.txSubmitFail - a.txSubmitFail) +
+      ' doneOk=' + (b.txDoneOk - a.txDoneOk) + ' doneFail=' + (b.txDoneFail - a.txDoneFail) +
+      ' drop=' + (b.txDrop - a.txDrop) + ' rxAny=' + (b.rxAny - a.rxAny) +
+      ' rxPair=' + (b.rxPair - a.rxPair) + ' rxBad=' + (b.rxDataBad - a.rxDataBad) +
+      ' | s0:up=' + s0.parsed.up + ' conn=' + s0.parsed.conn + ' bound=' + s0.parsed.bound +
+      ' -> s1:up=' + s1.parsed.up + ' conn=' + s1.parsed.conn + ' bound=' + s1.parsed.bound);
+  }
+
+  beacon('INSAMPLE', 'total=' + inCount + ' window=' + (Date.now() - t0) + 'ms');
+  dev.removeEventListener('inputreport', onIn);
+  try { await t.close(); } catch (e) {}
+  beacon('DONE', 'fin');
+})();
+</script>
+</body></html>
