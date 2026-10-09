@@ -14,6 +14,7 @@
   var HID = window.DbgHid;
   var SCN = window.DbgScenarios;
   var Via = window.DbgVia;
+  var Sim = window.DbgViaSim;
 
   function $(id) { return document.getElementById(id); }
   function hex16(n) { return '0x' + (n & 0xFFFF).toString(16).toUpperCase().padStart(4, '0'); }
@@ -291,6 +292,13 @@
   /** 桥事件 → 仪表盘 + 日志 */
   function onBridgeEvent(fr) {
     try {
+      /* LD7 VIA 模拟器（通路 C）：隧道事件 = 桌面 VIA 经无线/模组转发来的 VIA Raw HID，
+       * 由模拟器按 LD7 的 VIA 数据应答，并经 CMD_TUNNEL_* 回发模组。 */
+      if (viaSim && viaSim.running &&
+          (fr.cmd === F.EVT.TUNNEL_USB || fr.cmd === F.EVT.TUNNEL_BLE)) {
+        onViaSimTunnel(fr);
+        return;
+      }
       if (fr.cmd === F.EVT.STATE) {
         var s = D.decodeState(fr.payload);
         setStatusView(s);
@@ -821,6 +829,7 @@
   /* ============================ VIA 隧道回路测试 ============================ */
   var viaHid = null;
   var viaBle = null;
+  var viaSim = null;   /* LD7 键盘 VIA 数据模拟器（通路 C，经串口扮演 SK32/LD7） */
 
   function viaOpts() {
     var timeoutMs = parseInt($('viaTimeout').value, 10) || 3000;
@@ -1011,8 +1020,8 @@
       lines.push('射频: up=' + p.up + ' conn=' + p.conn + ' bound=' + p.bound +
         ' txBusy=' + p.txBusy + ' txQ=' + p.txQ + ' hbMiss=' + p.hbMiss + ' period=' + p.periodMs + 'ms');
       lines.push('计数: txSubmit ok/fail=' + c.txSubmitOk + '/' + c.txSubmitFail +
-        ' txDone ok/fail=' + c.txDoneOk + '/' + c.txDoneFail + ' txDrop=' + c.txDrop);
-      lines.push('       rxAny=' + c.rxAny + ' rxPair=' + c.rxPair + ' rxDataBad=' + c.rxDataBad);
+        ' txDone ok/fail=' + c.txDoneOk + '/' + c.txDoneFail + ' txTimeout=' + c.txTimeout);
+      lines.push('       rxAny=' + c.rxAny + ' hopShut=' + c.hopShut + ' rxDataBad=' + c.rxDataBad);
       lines.push('判读: ' + diagnoseHid(p));
       setResult(resEl, lines.join('\n'), p.bound && p.up ? 'ok' : 'err');
       viaLog('OK', 'Dongle 2.4G 诊断已读取');
@@ -1029,6 +1038,94 @@
   $('viaHidDiag').addEventListener('click', function () { viaHidDiagRun(); });
   $('viaBleConn').addEventListener('click', function () { viaBleToggle(); });
   $('viaBleRun').addEventListener('click', function () { viaRun(viaBle, $('viaBleResult'), $('viaBleRun')); });
+
+  /* ============================ LD7 键盘 VIA 数据模拟（通路 C：经串口扮演 SK32/LD7） ============================ */
+
+  function viaSimBadge(text, cls) {
+    var el = $('simState');
+    el.className = 'scn-badge' + (cls ? ' ' + cls : '');
+    el.textContent = text;
+  }
+  function kcHex(k) { return '0x' + k.toString(16).toUpperCase().padStart(4, '0'); }
+
+  function renderSimSnapshot() {
+    var el = $('simSnapshot');
+    if (!viaSim) { return; }
+    var s = viaSim.getSnapshot();
+    var lines = [];
+    lines.push('图层数: ' + s.layerCount + ' ｜ 层0: ' + s.layer0.map(kcHex).join(' '));
+    lines.push('RGB: ' + (s.rgb.enabled ?
+      ('mode=' + s.rgb.mode + ' bri=' + s.rgb.val + ' spd=' + s.rgb.speed + ' hue=' + s.rgb.hue + ' sat=' + s.rgb.sat) : '关闭'));
+    if (s.lastSummary) { lines.push('最近: ' + s.lastSummary); }
+    lines.push('隧道帧累计: ' + s.frameCount + ' ｜ VIA 请求应答: ' + s.viaCount);
+    el.textContent = lines.join('\n');
+  }
+
+  function onViaSimTunnel(fr) {
+    if (!commandIsSerialLink()) { return; }
+    var r = viaSim.handle(fr.cmd, fr.payload);
+    if (!r.handled) { return; }
+    var viaLabel = (fr.cmd === F.EVT.TUNNEL_BLE) ? 'BLE' : '2.4G';
+    /* 应答：CMD_TUNNEL_BLE/USB（快速路径，无 ACK，自动递增 seq、flags=0），经 sendFast 走监视器/日志 */
+    link.sendFast(r.replyCmd, r.reply).catch(function (e) { viaLog('ERR', 'LD7 VIA 应答发送失败：' + e.message); });
+    setResult($('simResult'), '[' + viaLabel + '] TX VIA 请求: ' + Sim.hex(fr.payload) +
+      '\n→ 应答: ' + r.summary + (r.detail ? ('　' + r.detail) : '') +
+      '\nRX VIA 应答: ' + Sim.hex(r.reply), 'ok');
+    viaLog('OK', 'LD7 VIA [' + viaLabel + '] ' + r.summary + (r.detail ? (' ' + r.detail) : ''));
+    renderSimSnapshot();
+  }
+
+  function commandIsSerialLink() {
+    if (!link || !link.isConnected()) {
+      setResult($('simResult'), '未连接串口（需先连接 WebSerial 到模组），无法应答隧道 VIA 请求', 'err');
+      viaLog('WARN', '未连接串口，LD7 VIA 模拟无法应答');
+      return false;
+    }
+    return true;
+  }
+
+  function viaSimToggle() {
+    var btn = $('simToggle');
+    if (viaSim && viaSim.running) {
+      viaSim.running = false;
+      btn.textContent = '启用模拟';
+      viaSimBadge('未启用', '');
+      setResult($('simResult'), 'LD7 VIA 模拟已停止（不再应答隧道 VIA 请求）', '');
+      viaLog('INFO', 'LD7 VIA 模拟已停止');
+      return;
+    }
+    if (!viaSim) {
+      viaSim = new Sim.ViaSim({
+        log: function (m) { log('INFO', m, 'SIM'); }
+      });
+    }
+    viaSim.running = true;
+    btn.textContent = '停止模拟';
+    viaSimBadge('模拟运行中', 'pass');
+    setResult($('simResult'), 'LD7 VIA 模拟已启用。请打开桌面 VIA（usevia.app），选择经蓝牙或 2.4G 连接的 LD7 设备进行配置', 'ok');
+    viaLog('OK', 'LD7 VIA 模拟已启用（经串口扮演 SK32/LD7，协议版本 0x' + Sim.VIA_PROTOCOL_VERSION.toString(16).toUpperCase().padStart(4, '0') + '）');
+    renderSimSnapshot();
+  }
+
+  $('simToggle').addEventListener('click', function () { viaSimToggle(); });
+  $('simReset').addEventListener('click', function () {
+    if (!viaSim) { viaSim = new Sim.ViaSim({ log: function (m) { log('INFO', m, 'SIM'); } }); }
+    viaSim.resetDefaults();
+    setResult($('simResult'), '已重置为 LD7 出厂默认键位 / RGB / 宏', 'ok');
+    viaLog('OK', 'LD7 VIA 模拟状态已重置为出厂默认');
+    renderSimSnapshot();
+  });
+  $('simPing').addEventListener('click', function () {
+    if (!viaSim) { viaSim = new Sim.ViaSim({ log: function (m) { log('INFO', m, 'SIM'); } }); }
+    /* 本地自检 GET_PROTOCOL_VERSION：不经串口，直接调用处理函数验证应答 */
+    var payload = new Uint8Array(32);
+    payload[0] = 0x01; /* id_get_protocol_version */
+    var r = viaSim.handle(F.EVT.TUNNEL_USB, payload);
+    var ok = (r.reply[0] === 0x01) && (r.reply[1] === (Sim.VIA_PROTOCOL_VERSION >> 8) & 0xFF) && (r.reply[2] === Sim.VIA_PROTOCOL_VERSION & 0xFF);
+    setResult($('simResult'), '本地自检 GET_PROTOCOL_VERSION: ' + (ok ? '通过' : '未通过') +
+      '\n应答: ' + Sim.hex(r.reply), ok ? 'ok' : 'err');
+    viaLog(ok ? 'OK' : 'ERR', 'LD7 VIA 本地自检 ' + (ok ? 'PASS' : 'FAIL') + '：' + Sim.hex(r.reply));
+  });
 
   /* ============================ 日志操作 ============================ */
   $('logLevelFilter').addEventListener('change', function () {

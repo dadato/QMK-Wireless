@@ -87,8 +87,8 @@
       reportPeriod: u16le(p, 6),
       txSubmitOk: u16le(p, 8), txSubmitFail: u16le(p, 10),
       txDoneOk: u16le(p, 12), txDoneFail: u16le(p, 14),
-      txDrop: u16le(p, 16),
-      rxAny: u16le(p, 18), rxPair: u16le(p, 20), rxDataBad: u16le(p, 22)
+      txTimeout: u16le(p, 16),
+      rxAny: u16le(p, 18), hopShut: u16le(p, 20), rxDataBad: u16le(p, 22)
     };
   }
   /* 诊断快照 → 单行摘要（供命令结果与监视器复用） */
@@ -97,8 +97,8 @@
       ' txBusy=' + d.txBusy + ' txQ=' + d.txQCnt + ' hbMiss=' + d.hbMiss +
       ' period=' + d.reportPeriod + 'ms' +
       ' txSubmit=' + d.txSubmitOk + '/' + d.txSubmitFail +
-      ' txDone=' + d.txDoneOk + '/' + d.txDoneFail + ' drop=' + d.txDrop +
-      ' rxAny=' + d.rxAny + ' rxPair=' + d.rxPair + ' rxBad=' + d.rxDataBad;
+      ' txDone=' + d.txDoneOk + '/' + d.txDoneFail + ' timeout=' + d.txTimeout +
+      ' rxAny=' + d.rxAny + ' hopShut=' + d.hopShut + ' rxBad=' + d.rxDataBad;
   }
   /* HID_DIAG 应答：14B BLE HID 服务注册取证（bridge_ble_hidsvc.c；[1..8] 均 LE16） */
   function decodeHidDiag(p) {

@@ -12,11 +12,13 @@
  *   2. RF_Tx/RF_Rx/RF_Shut/RF_Config 必须在**任务上下文**调用（厂商例程明确要求
  *      不得在 RF 回调里直接调用），故所有 RF 动作都经 TMOS 事件投递到
  *      rf24_process_event()，回调只搬数据 + 置事件。
- *   3. 数据面帧格式 = [type][link_id LE(2)][payload]：
+ *   3. 数据面帧格式 = [type][link_id LE(2)][seq][payload]：
  *      - link_id = CRC16(绑定密钥)，由 core 的 bridge_rf24pair 派生；本层在
  *        收包侧校验（不符即丢弃、不刷新心跳），发包侧自动附加
+ *      - seq = 每入队一帧 +1 的序号（重发沿用同一序号）；接收侧据此前置去重，
+ *        抑制「ACK 丢失 → 本端重发 → 对端二次投递」造成的重复上报/错序
  *      - 配对帧（BRIDGE_RADIO_PKT_PAIR）link_id 恒 0xFFFF，任何状态可收发
- *      收包校验通过后剥去 link_id，交 sdk_rf24_on_recv() 分流（见 callbacks）。
+ *      收包校验通过后剥去 link_id/seq，交 sdk_rf24_on_recv() 分流（见 callbacks）。
  *
  * 本文件包含 WCH SDK 头，**不参与** test_host 构建（见 test_host/Makefile）。
  */
@@ -62,9 +64,16 @@
  *   （主机侧表现为丢键 / 松开帧丢失导致连发）。
  *   现改为环形队列 + 在飞标志 s_tx_busy：入队不覆盖，只有 TX_FINISH/TX_FAIL
  *   回调才推进队列，绝不在在飞期间 RF_Shut。
- *   槽位 = 3B 帧头（type + link_id LE） + payload（≤ BRIDGE_MAX_PAYLOAD=64）+ 余量。 */
+ *   槽位 = 4B 帧头（type + link_id LE + seq） + payload（≤ BRIDGE_MAX_PAYLOAD=64）+ 余量。 */
 #define RF24_TX_QUEUE_DEPTH   4u            /* 队列深度（覆盖 RF_Tx 往返时延） */
-#define RF24_TX_SLOT          68u           /* = [len] + type + link_id(2) + payload(64) */
+/* 单帧「未收到对端 ACK」后的最大软件重发次数。
+ *   LLE_MODE_AUTO 只做「发一次 + 等一次 ACK」（约 200us 超时），且 rfConfig_t
+ *   无重传计数字段 → 硬件不会自动多次重发。原实现在 TX_MODE_RX_TIMEOUT /
+ *   TX_MODE_TX_FAIL 时直接出队丢帧（上行 0.5%~2% 丢包本底）。现改为：终态未
+ *   收到 ACK 时把队首帧原地重发，最多 RF24_TX_MAX_RETRY 次；仍失败才丢帧。
+ *   双端（键盘模组 / 接收器）共用本文件，故两端同时生效。 */
+#define RF24_TX_MAX_RETRY     5u
+#define RF24_TX_SLOT          69u           /* = [len] + type + link_id(2) + seq + payload(64) */
 #define RF24_REPORT_PERIOD_MS 1u            /* 默认 1ms（D5）；SET_CONFIG REPORT_PERIOD 可覆盖 */
 
 /* ------------------------------ 事件 ------------------------------ */
@@ -77,6 +86,9 @@
 
 #define RF24_LINK_LOST_CNT  3u    /* 连续 3 次心跳无收 → 断链（规格 6.2） */
 #define RF24_HB_PERIOD_MS   1000u
+/* 实验开关：0 = 关闭 1s 心跳（不发 HEARTBEAT、不做断链判定、不再重排/自续期）。
+ * 用途：验证「~1s 全黑突发」是否由心跳引发。1 = 保持原行为。 */
+#define RF24_HB_ENABLE      0
 
 /* ------------------------------ 状态 ------------------------------ */
 static uint8_t  s_task;
@@ -90,7 +102,10 @@ static uint8_t  s_tx_q[RF24_TX_QUEUE_DEPTH][RF24_TX_SLOT];
 static uint8_t  s_tx_q_head;                 /* 队首（正在发 / 待发） */
 static uint8_t  s_tx_q_cnt;
 static bool     s_tx_busy;                   /* RF_Tx 已提交、等 ACK/超时（TX 时序在飞） */
-static uint32_t s_tx_drop;                   /* 队列满 / 提交失败导致的丢帧计数（观测） */
+static uint8_t  s_tx_retry;                  /* 当前在飞帧已重发次数（新帧/出队时清零） */
+static bool     s_tx_last_ok;                /* 最近一次 TX 终态是否收到对端 ACK */
+static uint32_t s_tx_drop;                   /* 队列满 / 提交失败 / 重发耗尽导致丢帧计数（观测） */
+static uint8_t  s_tx_seq;                    /* 出站帧序号：每入队一帧 +1，重发沿用同一序号 */
 /* RX_MODE_RX_DATA(校验通过) → RX_MODE_TX_FINISH/FAIL 期间，硬件正在自动回 ACK。
  * 这是**非终态**：此窗口内任何 RF_Shut 都会打断 ACK，使对端 TX 收不到应答。
  * 置位期间禁止 pump_tx / arm_rx。 */
@@ -99,6 +114,8 @@ static bool     s_rx_acking;
 static uint8_t  s_rx_mail[RF24_RX_MAXLEN];
 static uint8_t  s_rx_len;
 static bool     s_rx_pending;
+static uint8_t  s_rx_last_seq;              /* 最近一次已交付的入站帧序号 */
+static bool     s_rx_last_valid;            /* s_rx_last_seq 是否有效（初始化/重连时清零） */
 
 static uint8_t  s_hb_miss;
 
@@ -135,6 +152,11 @@ static void rf24_arm_rx(void)
      * rf24_deliver() 的帧头检查静默丢弃。 */
     static uint8_t s_ack_dummy = 0u;
 
+    /* 防御：硬件正在自动回 ACK（s_rx_acking，非终态）时不得 RF_Shut，否则会
+     * 打断对端等待的 ACK，并丢掉本端 RX_MODE_TX_FINISH 终态回调。 */
+    if (s_rx_acking) {
+        return;
+    }
     (void)RF_Shut();
     (void)RF_Rx(&s_ack_dummy, 1u, 0xFFu, 0xFFu);
 }
@@ -144,8 +166,13 @@ static void rf24_tx_reset(void)
     s_tx_q_head = 0u;
     s_tx_q_cnt  = 0u;
     s_tx_busy   = false;
+    s_tx_retry  = 0u;
+    s_tx_last_ok = false;
     s_rx_acking = false;
     s_tx_drop   = 0u;
+    s_tx_seq    = 0u;
+    /* 去重基准清零：重连/重init 后对端可能从头起序号，避免误判为重复而丢首帧 */
+    s_rx_last_valid = false;
 }
 
 /* 提交队首帧到射频。只有 TX_FINISH/TX_FAIL 回调（RF24_EVT_TXDONE）才清除
@@ -173,16 +200,34 @@ static void rf24_pump_tx(void)
         s_tx_q_cnt--;
         s_tx_drop++;
         diag_inc(&s_diag_tx_submit_fail);
+        /* ★提交失败：射频无在飞事务，但也没有待发/接收在武装 → 立即重装接收，
+         * 否则本端变聋（此前直接 return，只等下一个 EVT_TX 才可能恢复）。 */
+        rf24_arm_rx();
         return;
     }
     s_tx_busy = true;
     diag_inc(&s_diag_tx_submit_ok);
 }
 
+/* 入站帧去重：rf24_post 每入队一帧才 +1 序号，而重发（RF24_TX_MAX_RETRY）沿用同一
+ * 序号且**紧邻发生**（重试期间队首不推进）→ 重复帧必然与「上次已交付序号」相同。
+ * 据此丢弃二次到达的同一帧，消除重传导致的重复上报与往返序号错序。
+ * 仅在通过 link_id 校验后对数据帧调用（陌生/串扰帧不得污染去重基准）。 */
+static bool rf24_rx_is_dup(uint8_t seq)
+{
+    if (s_rx_last_valid && (seq == s_rx_last_seq)) {
+        return true;
+    }
+    s_rx_last_seq   = seq;
+    s_rx_last_valid = true;
+    return false;
+}
+
 static void rf24_deliver(void)
 {
     uint8_t  type;
     uint16_t fid;
+    uint8_t  seq;
     uint8_t  tmp[RF24_RX_MAXLEN];
     uint8_t  plen;
 
@@ -190,22 +235,26 @@ static void rf24_deliver(void)
         return;
     }
     s_rx_pending = false;
-    if (s_rx_len < 3u) {
-        return;                     /* 帧头（type + link_id）不完整 */
+    if (s_rx_len < 4u) {
+        return;                     /* 帧头（type + link_id + seq）不完整 */
     }
 
     type = s_rx_mail[0];
     fid  = (uint16_t)((uint16_t)s_rx_mail[1] | ((uint16_t)s_rx_mail[2] << 8));
+    seq  = s_rx_mail[3];
 
     if (type == BRIDGE_RADIO_PKT_PAIR) {
         /* 配对帧：任何状态下可收发（link_id 恒 0xFFFF，不做密钥校验） */
         bool was_bound = bridge_rf24pair_is_bound();
 
+        if (rf24_rx_is_dup(seq)) {
+            return;                 /* 重传导致的重复配对帧：丢弃 */
+        }
         diag_inc(&s_diag_rx_pair);
-        plen  = (uint8_t)(s_rx_len - 3u);
+        plen  = (uint8_t)(s_rx_len - 4u);
         tmp[0] = type;
         for (uint8_t i = 0u; i < plen; i++) {
-            tmp[1u + i] = s_rx_mail[3u + i];
+            tmp[1u + i] = s_rx_mail[4u + i];
         }
         s_hb_miss = 0u;
         sdk_rf24_on_recv(tmp, (uint8_t)(1u + plen));
@@ -228,10 +277,13 @@ static void rf24_deliver(void)
         return;
     }
 
-    plen  = (uint8_t)(s_rx_len - 3u);
+    if (rf24_rx_is_dup(seq)) {
+        return;                     /* 重传导致的重复数据帧：丢弃（根因去重） */
+    }
+    plen  = (uint8_t)(s_rx_len - 4u);
     tmp[0] = type;
     for (uint8_t i = 0u; i < plen; i++) {
-        tmp[1u + i] = s_rx_mail[3u + i];
+        tmp[1u + i] = s_rx_mail[4u + i];
     }
     if (!s_conn) {
         s_conn = true;
@@ -242,9 +294,10 @@ static void rf24_deliver(void)
 }
 
 /* 投递待发报文（仅入队 + 置事件，不碰寄存器）。
- * 帧格式 = [type][link_id LE(2)][payload]；link_id 由绑定密钥派生：
+ * 帧格式 = [type][link_id LE(2)][seq][payload]；link_id 由绑定密钥派生：
  *   数据帧 = CRC16(绑定密钥)，未绑定 = 0xFFFF；配对帧恒 = 0xFFFF。
- * 队列满时丢**最旧**一帧（HID 绝对报文语义：保最新状态），并计数 s_tx_drop。 */
+ * 队列满时丢**最旧**一帧（HID 绝对报文语义：保最新状态），并计数 s_tx_drop；
+ *   但**在飞队首受保护不可丢**（见下），此时从次旧开始丢，以维持发送顺序。 */
 static int rf24_post(uint8_t type, const uint8_t *d, uint8_t len)
 {
     uint8_t  slot;
@@ -256,7 +309,7 @@ static int rf24_post(uint8_t type, const uint8_t *d, uint8_t len)
     if ((d == 0) && (len > 0u)) {
         return BRIDGE_ERR_PARAM;
     }
-    if ((uint16_t)len + 4u > (uint16_t)RF24_TX_SLOT) {
+    if ((uint16_t)len + 5u > (uint16_t)RF24_TX_SLOT) {
         return BRIDGE_ERR_PARAM;
     }
 
@@ -269,23 +322,34 @@ static int rf24_post(uint8_t type, const uint8_t *d, uint8_t len)
     }
 
     if (s_tx_q_cnt >= RF24_TX_QUEUE_DEPTH) {
-        s_tx_q_head = (uint8_t)((s_tx_q_head + 1u) % RF24_TX_QUEUE_DEPTH);
+        /* 队列满：丢一帧以腾位（HID 绝对报文语义：倾向保最新状态）。
+         *   ★不得丢**在飞队首**：它正被 RF_Tx 使用（可能正在重发），移动 head
+         *   会让随后的 TXDONE 推进到错误帧、打乱发送顺序。故有在飞帧时从
+         *   「次旧」开始丢，并整段前移以保持其余帧的相对顺序（严格 FIFO 不变）。 */
+        uint8_t k = s_tx_busy ? 1u : 0u;
+
+        for (uint8_t i = k; i + 1u < s_tx_q_cnt; i++) {
+            uint8_t dst = (uint8_t)((s_tx_q_head + i) % RF24_TX_QUEUE_DEPTH);
+            uint8_t src = (uint8_t)((s_tx_q_head + i + 1u) % RF24_TX_QUEUE_DEPTH);
+            memcpy(s_tx_q[dst], s_tx_q[src], RF24_TX_SLOT);
+        }
         s_tx_q_cnt--;
         s_tx_drop++;
     }
     slot = (uint8_t)((s_tx_q_head + s_tx_q_cnt) % RF24_TX_QUEUE_DEPTH);
 
-    /* 线上帧 = [type][link_id LE(2)][payload...]（RF_Tx 自 &slot[1] 起发 len+3 字节）：
-     *   [0] 只存线上长度（不发送），[1]=type、[2..3]=link_id、[4..]=payload。
-     *   接收侧 rf24_deliver() 按 s_rx_mail[0]=type、[1..2]=link_id、[3..]=payload
+    /* 线上帧 = [type][link_id LE(2)][seq][payload...]（RF_Tx 自 &slot[1] 起发 len+4 字节）：
+     *   [0] 只存线上长度（不发送），[1]=type、[2..3]=link_id、[4]=seq、[5..]=payload。
+     *   接收侧 rf24_deliver() 按 s_rx_mail[0]=type、[1..2]=link_id、[3]=seq、[4..]=payload
      *   解析，故此处**必须**把 type 放进 [1]；漏写会导致对端把 link_id 当 type，
      *   所有帧（含配对 PAIR_REQ/RESP）被直接丢弃。 */
-    s_tx_q[slot][0] = (uint8_t)(len + 3u);
+    s_tx_q[slot][0] = (uint8_t)(len + 4u);
     s_tx_q[slot][1] = type;
     s_tx_q[slot][2] = (uint8_t)(lid & 0xFFu);
     s_tx_q[slot][3] = (uint8_t)(lid >> 8);
+    s_tx_q[slot][4] = s_tx_seq++;   /* 出站序号：仅本帧入队时 +1，重发沿用同一值 */
     for (uint8_t i = 0u; i < len; i++) {
-        s_tx_q[slot][4u + i] = d[i];
+        s_tx_q[slot][5u + i] = d[i];
     }
     s_tx_q_cnt++;
 
@@ -310,22 +374,46 @@ static void rf24_status_cb(uint8_t sta, uint8_t rsr, uint8_t *rxBuf)
     case TX_MODE_RX_DATA:
         /* 收到对端 ACK，硬件已回 idle（SDK："receive data(ack) and enter idle state"）。
          * 这是链路层应答，不是数据帧：不投递、不计数，仅推进发送队列。 */
+        s_tx_last_ok = true;
         tmos_set_event(s_task, RF24_EVT_TXDONE);
         break;
 
     case TX_MODE_RX_TIMEOUT:
         /* 等 ACK 超时（约 200us），硬件已回 idle */
+        s_tx_last_ok = false;
         diag_inc(&s_diag_tx_done_fail);
         tmos_set_event(s_task, RF24_EVT_TXDONE);
         break;
 
     case TX_MODE_TX_FAIL:
         /* 发送失败，硬件已回 idle */
+        s_tx_last_ok = false;
         diag_inc(&s_diag_tx_done_fail);
         tmos_set_event(s_task, RF24_EVT_TXDONE);
         break;
 
     case RX_MODE_RX_DATA:
+        /* ★根因修复 —— 抢收作废在飞 TX 的终态回调（真机定位的「全黑突发」）：
+         * LLE_MODE_AUTO 下射频是**单一自动交替引擎**。本端 RF_Tx 提交后依次回调
+         * TX_MODE_TX_FINISH（非终态："data sent, wait for ack"），终态本应是随后的
+         * TX_MODE_RX_DATA（收到 ACK）/ TX_MODE_RX_TIMEOUT / TX_MODE_TX_FAIL。
+         * 但本工程两端**都会自发 RF_Tx**（对称收发，非参考工程的主从半双工）。当对端
+         * 自发的包恰落在本端「等 ACK」窗口内到达，硬件优先转入接收态并回调
+         * RX_MODE_RX_DATA —— 本端那个在飞 TX 的终态**从此永不再投递**。
+         * 后果：s_tx_busy 永久为真 → rf24_pump_tx / RF24_EVT_RX 的守卫
+         * （!s_tx_busy）双双挡住入口 → 收发两路都不再重排 → 射频事件泵停摆
+         * （实测 GET_DIAG 计数整段冻结、up 仍=1、仅 MCU 复位可恢复）。
+         *
+         * 确定性判据（非超时兜底）：终态回调必然把硬件带回 idle，而**重新接收必须
+         * 由软件 RF_Rx 武装**（本层只在任务上下文、且 !s_tx_busy 时才 arm_rx）。
+         * 因此「s_tx_busy 为真时却收到 RX_MODE_RX_DATA」只可能意味着该在飞 TX 的
+         * 终态被抢收丢弃。此处按「未收到对端 ACK」补发一次 TXDONE：队首原地重发、
+         * s_tx_busy 复位，状态机即刻自愈（与既有 RX_TIMEOUT/TX_FAIL 走同一路径）。 */
+        if (s_tx_busy) {
+            s_tx_last_ok = false;
+            diag_inc(&s_diag_tx_done_fail);
+            tmos_set_event(s_task, RF24_EVT_TXDONE);
+        }
         if (rsr != 0u) {
             /* CRC 错（bit0）/ 类型不匹配（bit1）：硬件不会回 ACK，可安全重新武装 */
             tmos_set_event(s_task, RF24_EVT_RX);
@@ -392,13 +480,36 @@ static uint16_t rf24_process_event(uint8_t task_id, uint16_t events)
         return (uint16_t)(events ^ RF24_EVT_TX);
     }
     if (events & RF24_EVT_TXDONE) {
-        /* 在飞 TX 结束：出队，然后续发下一帧或回接收态 */
+        /* 在飞 TX 结束，是否推进队列取决于终态是否收到对端 ACK：
+         *   收到 ACK   → 本帧投递成功，出队，重发计数清零；
+         *   未收到 ACK → 队首**原地保留**，由下面的 pump 重发同一帧
+         *                （最多 RF24_TX_MAX_RETRY 次）；
+         *   重发耗尽   → 出队丢弃，计入 s_tx_drop。 */
         if (s_tx_busy) {
             s_tx_busy = false;
-            s_tx_q_head = (uint8_t)((s_tx_q_head + 1u) % RF24_TX_QUEUE_DEPTH);
-            s_tx_q_cnt--;
+            if (s_tx_last_ok) {
+                s_tx_retry = 0u;
+                s_tx_q_head = (uint8_t)((s_tx_q_head + 1u) % RF24_TX_QUEUE_DEPTH);
+                s_tx_q_cnt--;
+            } else if (s_tx_retry < RF24_TX_MAX_RETRY) {
+                s_tx_retry++;
+            } else {
+                s_tx_retry = 0u;
+                s_tx_q_head = (uint8_t)((s_tx_q_head + 1u) % RF24_TX_QUEUE_DEPTH);
+                s_tx_q_cnt--;
+                s_tx_drop++;
+            }
         }
-        if (s_up) {
+        /* ★根因修复（严格一发一收硬死锁）：与 RF24_EVT_RX 同规则 —— 仅当射频
+         * 时序已回 idle（无在飞 TX、无正在自动回 ACK）才重排。此前本分支缺
+         * !s_rx_acking 守卫：当对端自发包落入本端「等 ACK」窗口触发
+         * RX_MODE_RX_DATA（置 s_rx_acking）并在同一回调里补发 TXDONE 时，本分支
+         * 会在硬件**自动回 ACK 尚未完成**时调用 rf24_arm_rx() → RF_Shut() 打断
+         * ACK，RX_MODE_TX_FINISH 永不投递 → s_rx_acking 永久为真且射频引擎停摆
+         * （实测：严格一发一收 ~1300 帧后 DG busy 卡死、全部 RF 计数冻结、仅
+         * drop 增长）。改为 acking 时不动作，交给随后的
+         * RX_MODE_TX_FINISH/FAIL → RF24_EVT_RX 统一续排。 */
+        if (s_up && !s_rx_acking) {
             if (s_tx_q_cnt > 0u) {
                 rf24_pump_tx();
             } else {
@@ -420,6 +531,7 @@ static uint16_t rf24_process_event(uint8_t task_id, uint16_t events)
         return (uint16_t)(events ^ RF24_EVT_RX);
     }
     if (events & RF24_EVT_HB) {
+#if RF24_HB_ENABLE
         if (s_up) {
             /* 心跳：维持链路活性 + 断链判定（规格 6.2） */
             if (s_hb_miss < 0xFFu) {
@@ -433,6 +545,7 @@ static uint16_t rf24_process_event(uint8_t task_id, uint16_t events)
             (void)rf24_post(BRIDGE_RADIO_PKT_HEARTBEAT, 0, 0u);
             tmos_start_task(s_task, RF24_EVT_HB, (uint16_t)RF24_HB_PERIOD_MS);
         }
+#endif
         return (uint16_t)(events ^ RF24_EVT_HB);
     }
     if (events & RF24_EVT_PAIR) {
@@ -519,7 +632,9 @@ int sdk_rf24_init(void)
 
     /* 进入接收态并启动心跳 */
     tmos_set_event(s_task, RF24_EVT_RX);
+#if RF24_HB_ENABLE
     tmos_start_task(s_task, RF24_EVT_HB, (uint16_t)RF24_HB_PERIOD_MS);
+#endif
     return BRIDGE_OK;
 }
 

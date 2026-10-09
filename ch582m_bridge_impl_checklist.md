@@ -2,7 +2,7 @@
 
 > 配套文档：[ch582m_bridge_fw_spec.md](./ch582m_bridge_fw_spec.md) · [ch582f_pinmap.md](./ch582f_pinmap.md)
 > 本文档回答三个问题：**命令表 → 函数签名 → 状态机落到哪个文件**。
-> 引脚与封装决策以 [ch582f_pinmap.md](./ch582f_pinmap.md) 第 0 章 D1~D14 为准（CH582F / QFN28）。
+> 引脚与封装决策以 [ch582f_pinmap.md](./ch582f_pinmap.md) 第 0 章 D1~D15 为准（CH582F / QFN28）。
 >
 > **代码落地位置**：`wireless/ch582f_fw/`（键盘侧 `keyboard/` + Dongle 侧 `dongle/`，共享 `core/` 与 `port/ch58x/`）。
 >
@@ -772,13 +772,15 @@ make -C wireless/ch582f_fw/test_host DONGLE=1 test # dongle 角色
 - `LIB_FLASH_BASE_ADDRESSS` 必须与所选 `LIBCH58xBLE.a` 一致（配错会上电即崩）
 - 2.4G `sdk_rf24_*` **已落地**（`bridge_rf24_ch58x.c`）：按厂商 `RF_PHY` 例程
   `RF_Config` + `RF_Tx`/`RF_Rx`/`RF_Shut`，TMOS 任务上下文投递，1s 心跳 + 连续 3 次无收断链；
-  保持**固定信道 + `LLE_MODE_AUTO`**。**跳频不启用**（`BRIDGE_FEATURE_RF24_HOP=0`，见 §12.6）：
+  保持 `LLE_MODE_AUTO`。**WCH 硬件跳频已启用**（`BRIDGE_FEATURE_RF24_HOP=1`，见 §12.6）：
   `RF_FrequencyHoppingTx/Rx` 是 TX 全通道遍历 / RX 单频点监听的非对称骨架、API 不带应用载荷，
-  本桥双向数据面无法套用；WCH 官方答复绑定/跳频/透传需自写算法。若后续要做同步跳频，
-  须在 `rf24_*` 内实现自定义跳频协议，`core` 无需改动
+  本桥在其上**叠加自实现的载荷承载**（键盘=initiator 只发，空闲 10ms 轮询；Dongle=responder
+  只收，下行经 `RF_Rx` 的自动 ACK 载荷回传），跳频同步以**外部 32.768kHz LSE**
+  （Makefile `CLK_OSC32K=0`，D15）为基准，双芯同源不失步；`core` 无需改动
 - **2.4G 配对 / 绑定已落地**（见 §12.6「2.4G 配对 / 绑定」）：数据面帧升级为
-  `[type][link_id LE(2)][payload]`，未绑定设备数据帧互不可达（防同环境多套串扰），
-  绑定密钥 + 对端 ID 掉电保存（NV 槽 `BRIDGE_NV_ID_RF24_BOND`）
+  `[type][link_id LE(2)][seq][payload]`（帧级序号去重，结论3），未绑定设备数据帧互不可达
+  （防同环境多套串扰），绑定信息（密钥 + 对端 ID + 随机数）掉电保存（NV 槽 `BRIDGE_NV_ID_RF24_BOND`），
+  并据其派生 access address（结论4）
 - **Dongle 角色修正**（core 板级差异）：Dongle 无 SK32 上游 → 不做 UART 心跳/断链判定、
   禁止空闲入睡；上电默认模式 2G4（旧固件记忆为 BLE 也强制回 2G4）
 - Dongle `sdk_usb_*` **已落地**（`bridge_usb_ch58x.c`）：按厂商 `CompoundDev` + `BLE_USB`
@@ -818,15 +820,33 @@ make -C wireless/ch582f_fw/test_host DONGLE=1 test # dongle 角色
 - **外部电量**：`CMD_SET_BATTERY` 0x1C（cycle 内下发电量百分比）或
   `SET_CONFIG` key 0x05 置 `BRIDGE_BATT_SRC_EXTERNAL`(2)；`bridge_power.c` 在
   `AUTO` 下"外部有效则用外部"，在 `EXTERNAL` 下仅用 SK32 上传值，本地 ADC 不参与。
-- **2.4G 跳频：不启用**（`BRIDGE_FEATURE_RF24_HOP=0`）。依据：厂商 `RF_PHY_Hop` 例程中
+- **2.4G 跳频：已启用**（`BRIDGE_FEATURE_RF24_HOP=1`）。厂商 `RF_PHY_Hop` 例程中
   `RF_FrequencyHoppingTx(resendCount)` / `RF_FrequencyHoppingRx(timeoutMS)` 均**不带应用载荷**，
-  是 TX 端每周期全通道遍历、RX 端每周期单频点监听的非对称骨架；本桥双向数据面无法套用。
-  WCH 官方论坛明确"绑定/跳频/透传需自写算法，跳频通道由上一包数据携带"。本层保持固定信道
-  + `LLE_MODE_AUTO`（自动 ACK/重传）；如需同步跳频，在 `rf24_*` 内自实现，`core` 不改。
+  是 TX 端每周期全通道遍历、RX 端每周期单频点监听的非对称骨架；本桥在其上**叠加自实现的载荷承载**
+  ——键盘=initiator（只发，空闲 10ms 轮询 `RF_Tx`）、Dongle=responder（只收，下行经 `RF_Rx` 的
+  自动 ACK 载荷回传），`LLE_MODE_AUTO` 自动 ACK/重传。跳频同步以**外部 32.768kHz LSE**
+  （Makefile `CLK_OSC32K=0`，D15）为基准，双芯同源不失步；`core` 不改。
+  - **更正**：早期文档误记 LSE「可选未接」，据此得出「硬件跳频不可行」的结论**作废**——本板
+    已实装 LSE，硬件跳频可行且已落地（`bridge_rf24_ch58x.c`，参照工程 3modekbd 同方向）。
+  - **对照参照工程 3modekbd（结论2/5）**：该工程在重传之上**叠加跳频**（`HopPeriod=16`）+ 2M PHY；
+    本工程已按同方向启用硬件跳频（`HopPeriod=16`），PHY 仍取 1M（理由见下条）。
+  - **PHY 速率 A/B（结论5，已实测定论）**：曾按参照工程切 `LLE_MODE_PHY_2M`，soak 10000
+    往返丢包 **1.67%**（`tx_done_fail≈53k`，首次 TX 大量失败、全靠重传兜底）；回退
+    `LLE_MODE_PHY_1M` 后丢包 **0.85%**（`tx_done_fail≈2k`）。2M 空口时间虽减半，但接收
+    灵敏度约降 ~3dB，在**无跳频的固定信道**上是负优化，故**保留 1M PHY**；跳频启用后仍保留 1M，
+    2M 留待后续再评估。两端须同步（双端同码）。
 - **2.4G 配对 / 绑定**（`core/bridge_rf24pair.{c,h}` + `bridge_rf24_ch58x.c` 帧层）：
-  - 帧格式：数据面 `[type][link_id LE(2)][payload]`；`link_id` = `CRC16(绑定密钥)`，
+  - 帧格式：数据面 `[type][link_id LE(2)][seq][payload]`（线上帧头 4B）；`link_id` = `CRC16(绑定密钥)`，
     配对帧 `link_id=0xFFFF`。收包侧在 RF 层校验：未绑定 / 密钥不符的帧丢弃且**不刷新心跳**
     （防陌生射频撑活链路）。
+  - **帧级序号去重（结论3）**：发送方每入队一帧 `seq++`（重传不改 seq），收侧记录上一交付
+    `seq`，同序号重复帧直接丢弃。用于消除「ACK 丢失 → 发送方重传 → 收侧重复交付」的重复上报；
+    与 `link_id` 组成「序号 + 密钥」双重校验（对照参照工程 3modekbd 的 `num + magicword`）。
+  - **绑定派生 access address（结论4）**：两端用绑定记录 `key/peer_id/rand` 经
+    `bridge_rf24pair_access_addr()` 派生唯一的 32bit AA（两端逐字节相同 → 派生值必然一致）；
+    `rf24_arm_rx()` 每次接收前按绑定状态在「默认 `0x71764129` ↔ 派生 AA」间运行时切换
+    （`RF_Shut`+`RF_Config`）。未绑定用默认 AA（配对帧须互通），绑定后各套设备 AA 不同，
+    进一步降低同频互扰（对照参照工程用配对 MAC 作 accessAddress）。
   - 配对流程（键盘发起 / Dongle 应答）：键盘 `CMD_PAIR_START`（或 Dongle 配对键）→
     进入 `MODE_2G4_PAIR` → 键盘每 200ms 发 `PAIR_REQ [kbd_id 4][rand 4]`；Dongle 收到后
     派生密钥 `key[i]=kbd_id^rand^dgl_id`（MAC 末 4B）→ 落盘 → 回 `PAIR_RESP`；
@@ -845,8 +865,8 @@ make -C wireless/ch582f_fw/test_host DONGLE=1 test # dongle 角色
     重置空闲计时，避免刚回落后立即入睡。
   - 竞态修复：`sdk_rf24_deinit()` 原未停 `RF24_EVT_PAIR` 自续期任务，deinit→init 会残留旧任务
     导致重复发 `PAIR_REQ`；现已补 `tmos_stop_task` + `tmos_clear_event`。
-  - 密钥仅在链路区分（非安全用途）；射频仍共享固定 accessAddress/CRC/信道，同环境多套
-    在协议层隔离。
+  - 密钥既用于链路区分（非安全用途），也**派生 access address（结论4）**；CRC/信道仍固定。
+    未绑定时共用默认 AA，同环境多套在此阶段仅靠协议层隔离；绑定后 AA 随绑定信息派生而互异。
 - **Dongle 角色修正**（core 板级差异，`bridge_app.c` / `bridge_mode.c`）：
   - 无 SK32 上游 → 跳过 UART 心跳 / 断链判定（否则 3s 无 PING 误判断链入睡）；
     禁止空闲休眠。

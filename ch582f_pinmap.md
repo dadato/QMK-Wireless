@@ -1,4 +1,4 @@
-# CH582F 管脚分配与设计决策（v1.2）
+# CH582F 管脚分配与设计决策（v1.3）
 
 > 配套文档：[ch582m_bridge_fw_spec.md](./ch582m_bridge_fw_spec.md) · [ch582m_bridge_impl_checklist.md](./ch582m_bridge_impl_checklist.md)
 >
@@ -25,6 +25,7 @@
 | D12 | OTA 方案 | **常驻 BOOT + Stage 暂存**（不划分 A/B 双应用区）：`BOOT@0x0(8K) + APP_A@0x2000(216K) + Stage@0x38000(216K)`；APP_A 搬运前不动，可自动重试/回退；ROM ISP 兜底 |
 | D13 | printf 日志 | **可配置开关**，输出走 UART0（PB4/PB7），量产默认关闭 |
 | D14 | 桥串口波特率 | **921600**（8N1；原 38400，后统一提升）；见规格 4.1：键盘帧占线 ≈0.17ms，HID 仍事件驱动、帧间隔 ≥5ms |
+| D15 | 32K 低速时钟源 | **外部 32.768kHz LSE 晶振**（PA10=X32KI / PA11=X32KO，**已实装**）。固件以 `CLK_OSC32K=0` 选外部 LSE，作为 RTC / TMOS 时基 / WCH 硬件跳频同步的基准（**更正**：早期文档误记该晶振为「可选未接」） |
 
 ---
 
@@ -85,7 +86,7 @@ QFN28 上可用的串口逐一排除：
 | 功能 | 引脚 | QFN28 Pin | 说明 |
 |---|---|---|---|
 | 32MHz 晶振 | X32MO / X32MI | **18 / 19** | 必需，±10 ppm |
-| 32.768kHz 晶振（可选） | PA11=X32KO / PA10=X32KI | **1 / 2** | 需 RTC 精确定时则接；否则释放为 GPIO |
+| 32.768kHz 晶振（LSE，**已实装**） | PA11=X32KO / PA10=X32KI | **1 / 2** | **必需**：RTC / TMOS 时基 / WCH 硬件跳频同步基准；固件用 `CLK_OSC32K=0` 选外部 LSE（D15） |
 | 天线 | ANT | **21** | 50Ω 直连天线 |
 | 电源 | VDCID / VSW / VDD33+VIO33 | **3 / 4 / 5** | 见 3.3 |
 | 模拟电源 | VINTA / VDCIA | **20 / 22** | 退耦电容必需 |
@@ -109,8 +110,8 @@ QFN28 上可用的串口逐一排除：
 |---|---|
 | 已分配 GPIO | 11（BR_RX/TX、MODE_SEL0/1、WAKE、LINK、nRESET、BAT_ADC、CHRG_STAT、TCK、TIO） |
 | 保留（ISP / 调试串口） | 3（ISP_CFG、DBG_TX、DBG_RX） |
-| 条件占用 | 2（PA10/PA11，仅当使用 32.768kHz 晶振） |
-| 空闲备用 | **3~5**（PB10、PB11、PA12 + 条件释放的 PA10/PA11） |
+| 专用（非 GPIO，已实装） | 2（PA10/PA11，32.768kHz LSE 晶振，D15） |
+| 空闲备用 | **3**（PB10、PB11、PA12） |
 
 ---
 
@@ -130,7 +131,7 @@ QFN28 上可用的串口逐一排除：
 | 模拟电源 | VINTA / VDCIA | — | — | **20 / 22** | 同 3.3 |
 | 地 | GND / EPAD | — | — | **0** | — |
 
-Dongle 侧 GPIO 占用极少，剩余 14 个引脚空闲。
+Dongle 侧 GPIO 占用极少，剩余 12 个引脚空闲（PA10/PA11 已被 32.768kHz LSE 占用，见 D15）。
 
 ---
 
@@ -178,12 +179,12 @@ Dongle 侧同理，需能进入定频模式（键盘与 Dongle 组成一套系�
 ## 6. 未使用引脚处理
 
 - 未使用 GPIO 一律配置为**推挽输出低**（由 `port_gpio_init()` 统一处理），避免悬空输入漏电、受干扰影响待机电流
-- **键盘侧**未使用清单：PA10、PA11（不用 32.768kHz 晶振时释放为 GPIO）、PA12、PB10、PB11（键盘侧不走 USB，USB1 差分对闲置）
-- **Dongle 侧**未使用清单：PA8、PA9（无 UART1 数据面）、PA10、PA11、PA12、PA13、PA14、PA15（无拨码/电池/控制信号）、PB12、PB13（USB2 闲置）
+- **键盘侧**未使用清单：PA12、PB10、PB11（键盘侧不走 USB，USB1 差分对闲置）
+- **Dongle 侧**未使用清单：PA8、PA9（无 UART1 数据面）、PA12、PA13、PA14、PA15（无拨码/电池/控制信号）、PB12、PB13（USB2 闲置）
 - `ISP_CFG`（PB22）必须 **10k 上拉**，确保上电不误入 BootLoader；量产治具/恢复模式下拉至低
 - TCK/TIO（PB14/PB15）为两线仿真（SDI 的 TIO/TCK）调试口，**严禁改写为输出**，保持默认
 - PB23 为 `RST#`（外部复位输入），非 GPIO，**不得驱动**
-- 32.768kHz 晶振若不使用，PA10/PA11 按未使用引脚处理（推挽输出低），并注意 X32KI/X32KO 不再外接
+- 32.768kHz 晶振（LSE）**已实装**：PA10/PA11 固定接 X32KI/X32KO，固件以 `CLK_OSC32K=0` 选外部 LSE，**严禁**再配置为 GPIO 输出
 
 ---
 

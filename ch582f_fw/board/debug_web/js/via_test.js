@@ -162,9 +162,9 @@
         txSubmitFail: le16(d, 10),
         txDoneOk: le16(d, 12),
         txDoneFail: le16(d, 14),
-        txDrop: le16(d, 16),
+        txTimeout: le16(d, 16),
         rxAny: le16(d, 18),
-        rxPair: le16(d, 20),
+        hopShut: le16(d, 20),
         rxDataBad: le16(d, 22)
       }
     };

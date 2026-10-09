@@ -4,10 +4,11 @@
  *   1. 键盘与接收器**显式配对**，未绑定设备互不互通（防同环境多套串扰）
  *   2. 绑定密钥 + 对端标识**掉电保存**（DataFlash），重启后凭密钥直接建链
  *
- * 帧格式（rf24 数据面扩展，type 之后固定 2 字节 link_id 小端）：
- *   [type][link_id(2B)][payload...]
+ * 帧格式（rf24 数据面扩展，type 之后固定 2 字节 link_id 小端 + 1 字节帧序号）：
+ *   [type][link_id(2B)][seq][payload...]
  *     - 数据帧 link_id = CRC16(绑定密钥)；与本地不符的帧由 RF 层丢弃
  *     - 配对帧 link_id = 0xFFFF（任何状态下可收发）
+ *     - seq = RF 层出站序号（每入队一帧 +1，重发沿用）；RF 层据此去重后剥除
  *
  * 配对流程（键盘发起 / Dongle 应答，与 SK32 的 CMD_PAIR_START / Dongle 配对键一致）：
  *   KBD (2G4_PAIR) 周期发 PAIR_REQ: [0x01][kbd_id 4B][rand 4B]

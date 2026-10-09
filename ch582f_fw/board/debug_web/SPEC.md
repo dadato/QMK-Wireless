@@ -150,7 +150,7 @@ CH582F 模组 UART1 (PA8=RXD1 / PA9=TXD1)
 | `GET_ADC` | `0x1E` | — | `[mv u16 LE]` | 采集电压 |
 | `SET_NAME` | `0x1F` | `[target u8][name...]` | — | 改名（`target` 0=BLE 广播名 / 1=Dongle USB 名，经 2.4G 转发） |
 | `SET_USB_ID` | `0x20` | `[vid u16 LE][pid u16 LE]` | — | 改写 USB 标识（Dongle 侧重枚举） |
-| `GET_DIAG` | `0x2A` | — | `[0]up [1]conn [2]bound [3]tx_busy [4]tx_q_cnt [5]hb_miss [6..7]report_period [8..9]tx_submit_ok [10..11]tx_submit_fail [12..13]tx_done_ok [14..15]tx_done_fail [16..17]tx_drop [18..19]rx_any [20..21]rx_pair [22..23]rx_data_bad`（`[6..23]` 均 LE16） | 2.4G 射频诊断快照（24B，排障用） |
+| `GET_DIAG` | `0x2A` | — | `[0]up [1]conn [2]bound [3]tx_busy [4]tx_q_cnt [5]hb_miss [6..7]report_period [8..9]tx_submit_ok [10..11]tx_submit_fail [12..13]tx_done_ok [14..15]tx_done_fail [16..17]tx_timeout [18..19]rx_any [20..21]hop_shut [22..23]rx_data_bad`（`[6..23]` 均 LE16） | 2.4G 射频诊断快照（24B，排障用） |
 | `HID_DIAG` | `0x2B` | — | `[0]reg [1..2]hid_handle [3..4]map_handle [5..6]raw_in_handle [7..8]raw_out_handle [9]report_cnt [10]attr_cnt [11]reset_src [12]stage_prev [13]stage_now`（`[1..8]` 均 LE16） | BLE HID 服务注册取证（14B，排障用）：`reg`=`GATTServApp_RegisterService` 返回值（`0`=成功/`0xFF`=未调用）；`raw_in/out_handle`=RID5 IN/OUT 属性 handle；仅键盘模组支持，Dongle 侧 → `ERR(STATE)` |
 | `PING` | `0x7F` | — | `EVT_PONG`（`flags=ACK`） | 心跳/往返 |
 | `FW_BEGIN/DATA/END/ABORT` | `0x21~0x24` | 见 [ota_web SPEC §4.6](file:///c:/Users/Administrator/Desktop/qmk/qmk_firmware/wireless/ch582f_fw/board/ota_web/SPEC.md) | — | 仅保留「调试/引用」，升级流程由 `ota_web` 承担 |

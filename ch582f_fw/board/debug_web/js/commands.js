@@ -299,7 +299,7 @@
           fields: [],
           run: async function (c) { var a = await c.getAdcMv(); return { text: 'ADC ' + a.mv + ' mV', frame: a.frame }; } },
         { id: 'get_diag', label: 'GET_DIAG', cmd: F.CMD.GET_DIAG,
-          desc: '读取 2.4G 射频诊断计数（24B，排障用）。\n请求：无 payload。\n应答：ACK + 24B：[0]up [1]conn [2]bound [3]tx_busy [4]tx_q_cnt [5]hb_miss [6..7]report_period，[8..23] 依次为 tx_submit_ok/fail、tx_done_ok/fail、tx_drop、rx_any、rx_pair、rx_data_bad（[6..23] 均 LE16）。\n错误码：无。',
+          desc: '读取 2.4G 射频诊断计数（24B，排障用）。\n请求：无 payload。\n应答：ACK + 24B：[0]up [1]conn [2]bound [3]tx_busy [4]tx_q_cnt [5]hb_miss [6..7]report_period，[8..23] 依次为 tx_submit_ok/fail、tx_done_ok/fail、tx_timeout、rx_any、hop_shut、rx_data_bad（[6..23] 均 LE16）。\n错误码：无。',
           fields: [],
           run: async function (c) { var d = await c.getDiag(); return { text: D.diagText(d), frame: d.frame }; } },
         { id: 'hid_diag', label: 'HID_DIAG', cmd: F.CMD.HID_DIAG,

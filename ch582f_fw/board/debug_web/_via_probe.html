@@ -62,8 +62,8 @@
     return 'mode=' + p.mode + ' up=' + p.up + ' conn=' + p.conn + ' bound=' + p.bound +
       ' txBusy=' + p.txBusy + ' txQ=' + p.txQ + ' hbMiss=' + p.hbMiss + ' period=' + p.periodMs +
       ' | subOk=' + c.txSubmitOk + ' subFail=' + c.txSubmitFail +
-      ' doneOk=' + c.txDoneOk + ' doneFail=' + c.txDoneFail + ' drop=' + c.txDrop +
-      ' rxAny=' + c.rxAny + ' rxPair=' + c.rxPair + ' rxBad=' + c.rxDataBad;
+      ' doneOk=' + c.txDoneOk + ' doneFail=' + c.txDoneFail + ' timeout=' + c.txTimeout +
+      ' rxAny=' + c.rxAny + ' hopShut=' + c.hopShut + ' rxBad=' + c.rxDataBad;
   }
 
   /* 1) OTA S0（本地应答，确认传输层可用） */
@@ -89,8 +89,8 @@
     var a = s0.parsed.counters, b = s1.parsed.counters;
     beacon('DIFF', 'subOk=' + (b.txSubmitOk - a.txSubmitOk) + ' subFail=' + (b.txSubmitFail - a.txSubmitFail) +
       ' doneOk=' + (b.txDoneOk - a.txDoneOk) + ' doneFail=' + (b.txDoneFail - a.txDoneFail) +
-      ' drop=' + (b.txDrop - a.txDrop) + ' rxAny=' + (b.rxAny - a.rxAny) +
-      ' rxPair=' + (b.rxPair - a.rxPair) + ' rxBad=' + (b.rxDataBad - a.rxDataBad) +
+      ' timeout=' + (b.txTimeout - a.txTimeout) + ' rxAny=' + (b.rxAny - a.rxAny) +
+      ' hopShut=' + (b.hopShut - a.hopShut) + ' rxBad=' + (b.rxDataBad - a.rxDataBad) +
       ' | s0:up=' + s0.parsed.up + ' conn=' + s0.parsed.conn + ' bound=' + s0.parsed.bound +
       ' -> s1:up=' + s1.parsed.up + ' conn=' + s1.parsed.conn + ' bound=' + s1.parsed.bound);
   }
