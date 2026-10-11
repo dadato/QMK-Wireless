@@ -66,9 +66,10 @@
     FW_DATA: 0x22,
     FW_END: 0x23,
     FW_ABORT: 0x24,
+    SLEEP_CFG: 0x25,  /* SLEEP 时间配置：payload [idle_s LE16][deep_s LE16]，单位 s */
 
     GET_DIAG: 0x2A,   /* 2.4G 诊断快照（排障用，不在市售模组指令集内；应答 24B） */
-    HID_DIAG: 0x2B,   /* BLE HID 服务注册取证（排障用；应答 14B） */
+    HID_DIAG: 0x2B,   /* BLE HID 服务注册取证（排障用；应答 26B） */
 
     PING: 0x7F
   };
@@ -103,7 +104,7 @@
     0x18: 'TUNNEL_USB', 0x19: 'TUNNEL_BLE', 0x1A: 'NV_WRITE', 0x1B: 'NV_READ',
     0x1C: 'SET_BATTERY', 0x1D: 'SLEEP', 0x1E: 'GET_ADC', 0x1F: 'SET_NAME',
     0x20: 'SET_USB_ID', 0x21: 'FW_BEGIN', 0x22: 'FW_DATA', 0x23: 'FW_END',
-    0x24: 'FW_ABORT', 0x2A: 'GET_DIAG', 0x2B: 'HID_DIAG', 0x7F: 'PING'
+    0x24: 'FW_ABORT', 0x25: 'SLEEP_CFG', 0x2A: 'GET_DIAG', 0x2B: 'HID_DIAG', 0x7F: 'PING'
   };
 
   var EVENT_NAMES = {
@@ -157,7 +158,7 @@
 
   /* 用户 NV（bridge_config.h「应用 NV 全槽分配」） */
   var NV_UNIT = 32;
-  var NV_USER_UNITS = 62;
+  var NV_USER_UNITS = 46;
 
   /* HID 报文长度（bridge_types.h） */
   var REPORT_LEN = {

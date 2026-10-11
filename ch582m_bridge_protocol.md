@@ -1071,10 +1071,14 @@ off=0 dlen=8 : AA 55 0C 22 2B 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 97 D0
 | 10..11 | `tx_submit_fail` | 提交失败 |
 | 12..13 | `tx_done_ok` | 完成成功 |
 | 14..15 | `tx_done_fail` | 完成失败 |
-| 16..17 | `tx_timeout` | 等对端 ACK 超时（TX_MODE_RX_TIMEOUT） |
+| 16..17 | `tx_drop` | 射频层丢帧（队列满丢最旧 + 重发耗尽丢帧） |
 | 18..19 | `rx_any` | 收到任意包 |
-| 20..21 | `hop_shut` | 跳频失步事件次数 |
+| 20..21 | `rx_pair` | 配对阶段收到包（配对窗口内监听计数） |
 | 22..23 | `rx_data_bad` | 收到坏数据包 |
+
+> 字段命名与语义严格对应固件 `sdk_rf24_diag()`（`bridge_rf24_ch58x.c`）。早期文档误记
+> `[16..17]=tx_timeout`、`[20..21]=hop_shut`：二者并非独立计数器，`tx_done_fail` 已含
+> TX_MODE_RX_TIMEOUT，跳频未启用（`BRIDGE_FEATURE_RF24_HOP=0`，无 `hop_shut` 计数）。
 
 - **备注**：`[6..23]` 均为 LE16。
 

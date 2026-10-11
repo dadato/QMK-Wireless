@@ -2,6 +2,7 @@
 <html><head><meta charset="utf-8"><title>ECODE check</title></head>
 <body>
 <pre id="out">running…</pre>
+<script src="js/crc16.js"></script>
 <script src="js/frame.js"></script>
 <script src="js/scenarios.js"></script>
 <script>
@@ -24,8 +25,8 @@
   lines.push('RESULT smoke.setTestMode  ok=' + b.r[0].ok + ' detail=' + b.r[0].detail);
 
   var c1 = mk();
-  await c1.ch.errIs(F.ECODE.PARAM, rej(0x06), 'NV[62] 越界 → ERR(PARAM)');
-  lines.push('RESULT nv.nvRead62        ok=' + c1.r[0].ok + ' detail=' + c1.r[0].detail);
+  await c1.ch.errIs(F.ECODE.PARAM, rej(0x06), 'NV[46] 越界 → ERR(PARAM)');
+  lines.push('RESULT nv.nvRead46        ok=' + c1.r[0].ok + ' detail=' + c1.r[0].detail);
 
   var d = mk();
   await d.ch.errIs(F.ECODE.PARAM, rej(0x06), '未知配置键 → ERR(PARAM)');

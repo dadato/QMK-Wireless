@@ -23,6 +23,7 @@
 #include "HAL.h"               /* HAL_Init / CH58X_BLEInit / CH58X_LowPower / RTC 宏 */
 #include "hiddev.h"            /* HidDev_Init / HidDev_Report / HID_REPORT_TYPE_INPUT */
 #include "hidkbd.h"            /* HidEmu_Init */
+#include "devinfoservice.h"    /* DevInfo_SetParameter（扩展：改写 PnP ID → BLE VID/PID） */
 
 #include "bridge_ch58x_sdk.h"   /* 本文件实现的接口 + DataFlash 布局宏 */
 #include "bridge_ble_hidsvc.h"  /* 本工程替代 hidkbdservice.c 的 HID 服务 + RID */
@@ -751,6 +752,23 @@ int sdk_ble_deinit(void)
     return BRIDGE_OK;
 }
 
+/* ---- BLE 出站 notify 取证 + 瞬态失败延迟重试 ----
+ * hiddev.c 的 HidDev_sendNoti 在 GATT_bm_alloc 返回 NULL（bleMemAllocError）或
+ * GATT_Notification != SUCCESS 时**静默丢帧**，无重试、无队列（厂商文件不可改）。
+ * 为定位偶发丢帧并做根本修复：统计失败次数，并把失败帧暂存 1 帧，交由主循环
+ * sdk_ble_notify_poll() 在下一轮（TMOS 已释放协议栈缓冲后）延迟重发一次。
+ * 计数用 32 位，避免 16 位回绕（历史教训见 tools/_diagcheck.py）。 */
+static uint32_t s_ble_notify_fail;          /* HidDev_Report 返回非 SUCCESS 的累计次数 */
+static uint32_t s_ble_notify_retry_ok;      /* 延迟重发成功次数 */
+static uint32_t s_ble_notify_retry_drop;    /* 延迟重发仍失败（放弃）次数 */
+
+static struct {
+    bool     pending;
+    uint8_t  rid;
+    uint8_t  len;
+    uint8_t  data[BRIDGE_HID_RAW_REPORT_LEN];
+} s_ble_notify_q;
+
 int sdk_ble_hid_send(uint8_t rid, const uint8_t *d, uint8_t len)
 {
     if (s_ble_conn == SDK_BLE_CONN_INVALID) {
@@ -760,10 +778,40 @@ int sdk_ble_hid_send(uint8_t rid, const uint8_t *d, uint8_t len)
      * 载荷不含 Report ID（Report ID 由 Report Reference 描述符告知主机），
      * type 固定为 Input（hiddev.h：HID_REPORT_TYPE_INPUT=1），
      * rid 由 port 层按报文类型给出（见 bridge_ble_hidsvc.h）。 */
-    return (HidDev_Report(rid, HID_REPORT_TYPE_INPUT, len, (uint8_t *)d) == SUCCESS)
-               ? BRIDGE_OK
-               : BRIDGE_ERR_IO;
+    if (HidDev_Report(rid, HID_REPORT_TYPE_INPUT, len, (uint8_t *)d) == SUCCESS) {
+        return BRIDGE_OK;
+    }
+    s_ble_notify_fail++;
+    /* 深度 1：转发路径本身禁止阻塞/排队，高帧率下旧暂存帧会被新帧覆盖。 */
+    if ((size_t)len <= sizeof(s_ble_notify_q.data)) {
+        s_ble_notify_q.rid     = rid;
+        s_ble_notify_q.len     = len;
+        memcpy(s_ble_notify_q.data, d, len);
+        s_ble_notify_q.pending = true;
+    }
+    return BRIDGE_ERR_IO;
 }
+
+void sdk_ble_notify_poll(void)
+{
+    if (!s_ble_notify_q.pending) {
+        return;
+    }
+    s_ble_notify_q.pending = false;     /* 深度 1：本轮无论成败都不再保留 */
+    if (s_ble_conn == SDK_BLE_CONN_INVALID) {
+        return;
+    }
+    if (HidDev_Report(s_ble_notify_q.rid, HID_REPORT_TYPE_INPUT,
+                      s_ble_notify_q.len, s_ble_notify_q.data) == SUCCESS) {
+        s_ble_notify_retry_ok++;
+    } else {
+        s_ble_notify_retry_drop++;
+    }
+}
+
+uint32_t sdk_ble_notify_fail_count(void)       { return s_ble_notify_fail; }
+uint32_t sdk_ble_notify_retry_ok_count(void)   { return s_ble_notify_retry_ok; }
+uint32_t sdk_ble_notify_retry_drop_count(void) { return s_ble_notify_retry_drop; }
 
 bool sdk_ble_is_connected(void)
 {
@@ -1081,6 +1129,30 @@ int sdk_ble_set_adv_name_with_mac(bool en)
     s_adv_name_mac = en ? true : false;
     sdk_ble_apply_adv();            /* 用已保存的基准名重建 */
     return BRIDGE_OK;
+}
+
+/* 改写 BLE Device Information Service 的 PnP ID 特征值（0x2A50）：
+ *   [0] Vendor ID Source = 1（Bluetooth SIG 分配）
+ *   [1..2] Vendor ID  LE
+ *   [3..4] Product ID LE
+ *   [5..6] Product Version（保持 SDK 默认 0x0110）
+ * 主机（Windows / Chrome WebHID）在连接时读取该特征值判定 BLE HID 的 VID/PID，
+ * 故 CMD_SET_USB_ID 在键盘侧同步调用本函数，使 VIA 能命中键盘定义。 */
+int sdk_ble_set_ids(uint16_t vid, uint16_t pid)
+{
+    uint8_t pnp[DEVINFO_PNP_ID_LEN];
+    bStatus_t st;
+
+    pnp[0] = 1u;                            /* VID source: Bluetooth SIG */
+    pnp[1] = LO_UINT16(vid);
+    pnp[2] = HI_UINT16(vid);
+    pnp[3] = LO_UINT16(pid);
+    pnp[4] = HI_UINT16(pid);
+    pnp[5] = 0x10u;                         /* Product version JJ.M.N = 01.1.0 */
+    pnp[6] = 0x01u;
+
+    st = DevInfo_SetParameter(DEVINFO_PNP_ID, sizeof(pnp), pnp);
+    return (st == SUCCESS) ? BRIDGE_OK : BRIDGE_ERR_UNSUPPORTED;
 }
 
 /* ---------------- SRRC 定频（D9） ----------------

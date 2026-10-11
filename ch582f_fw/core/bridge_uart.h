@@ -51,7 +51,23 @@ uint32_t bridge_uart_rx_gap_ms(void);
 
 /* 统计（测试与诊断用） */
 uint16_t bridge_uart_crc_error_count(void);
-uint16_t bridge_uart_drop_count(void);
+uint16_t bridge_uart_drop_count(void);          /* 丢字节合计（兼容旧调用） */
+
+/* RX 线路状态错误（ISR 内由 port 层解码 LSR 后回调）：
+ * 用于把「字节级丢失」归因到接收 FIFO 溢出 / 帧错 / 校验错，而不仅是丢帧总数。 */
+#define BRIDGE_RX_ERR_OVERRUN  0x01u   /* 接收 FIFO 溢出（overrun，字节被静默丢弃） */
+#define BRIDGE_RX_ERR_FRAME    0x02u   /* 帧错误（stop bit / 断线） */
+#define BRIDGE_RX_ERR_PARITY   0x04u   /* 校验错误 */
+void     bridge_uart_note_rx_error(uint8_t flags);
+
+/* 细分统计：定位 2.4G 上行丢包时区分「ring 满 / 半帧超时 / 长度越界」三处丢点 */
+uint16_t bridge_uart_drop_half_frame(void);
+uint16_t bridge_uart_drop_ring_full(void);
+uint16_t bridge_uart_drop_len_over(void);
+uint32_t bridge_uart_rx_ok_count(void);          /* 成功组装的合法帧数 */
+uint16_t bridge_uart_rx_overrun_count(void);
+uint16_t bridge_uart_rx_frame_err_count(void);
+uint16_t bridge_uart_rx_parity_err_count(void);
 
 /* 把编码后的帧写入 out，返回整帧长度（不发送，供测试与估算使用） */
 uint16_t bridge_uart_encode(uint8_t *out, uint16_t out_size, uint8_t cmd, uint8_t seq,

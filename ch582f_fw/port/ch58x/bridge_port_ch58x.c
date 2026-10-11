@@ -137,14 +137,30 @@ void port_uart_tx_flush(void)
 void bridge_ch58x_uart_isr(void)
 {
     uint8_t guard = 64u;
+    uint8_t lsr;
+    uint8_t rx_err = 0u;
 
     /* 读 IIR 清中断标志（RECV_RDY / RECV_TOUT / LINE_STAT 共用本处理） */
     (void)sdk_uart1_iir();
 
     /* ★ 必须读 LSR 清「线路状态」错误位（溢出/帧错；接收侧使能了 LINE_STAT）。
      * 不清会在持续收包触发溢出后形成中断风暴：ISR 反复进入、主循环被饿死
-     * （真机 OTA 实测：连续传输数十 KB 后模组完全静默，PC 停在读 RFC 的循环里）。 */
-    (void)sdk_uart1_lsr();
+     * （真机 OTA 实测：连续传输数十 KB 后模组完全静默，PC 停在读 RFC 的循环里）。
+     * 同时把错误位分类计数：接收 FIFO 溢出（OVER_ERR）会静默丢字节，
+     * 是「一条腿全干净、只有并发射频负载下才丢」的根因候选，必须可观测。 */
+    lsr = sdk_uart1_lsr();
+    if (lsr & SDK_UART1_LSR_OVER_ERR) {
+        rx_err |= BRIDGE_RX_ERR_OVERRUN;
+    }
+    if (lsr & SDK_UART1_LSR_FRAME_ERR) {
+        rx_err |= BRIDGE_RX_ERR_FRAME;
+    }
+    if (lsr & SDK_UART1_LSR_PAR_ERR) {
+        rx_err |= BRIDGE_RX_ERR_PARITY;
+    }
+    if (rx_err != 0u) {
+        bridge_uart_note_rx_error(rx_err);
+    }
 
     /* 读空 RX FIFO；@921600 单字节 ≈10.9µs，8 级 FIFO 满约需 87µs。
      * 加 64 次上限：即使 RFC 出现异常也不把主循环困在 ISR（剩余字节由
@@ -561,6 +577,7 @@ void bridge_ch58x_loop(void)
     sdk_wdog_feed();        /* 看门狗：主循环每轮喂狗（400ms 窗口） */
     BRIDGE_DBG(0x11);       /* 即将进入协议栈事件处理（潜在长阻塞点） */
     sdk_tmos_process();     /* BLE 协议栈事件（含连接/配对回调） */
+    sdk_ble_notify_poll();  /* 上一轮 notify 失败帧的延迟重发（TMOS 已释放缓冲） */
     BRIDGE_DBG(0x12);       /* 协议栈事件处理已返回 */
     port_uart_tx_poll();    /* 串口 TX 排空 */
     BRIDGE_DBG(0x13);
@@ -679,9 +696,11 @@ bool bridge_ch58x_shallow_ok(void)
     if (bridge_mode_get() == MODE_BLE || bridge_mode_get() == MODE_BLE_PAIR) {
         return false;
     }
-    /* 睡眠策略：MANUAL 下未经 CMD_SLEEP(IDLE/DEEP) 指令许可则不自动浅睡，
-     * 使模块保持清醒（亦便于 SDI 调试口常连，避免误判"砖"）。 */
-    return bridge_mode_sleep_permitted();
+    /* 睡眠策略与时间门限：MANUAL 下未经 CMD_SLEEP(IDLE/DEEP) 指令许可则不自动浅睡，
+     * 使模块保持清醒（亦便于 SDI 调试口常连，避免误判"砖"）；AUTO 下还需距最近一次
+     * 串口接收活动达 cfg->sleep_idle_s 秒（见 bridge_mode_shallow_permitted）。
+     * 注：上方 BRIDGE_RX_HOLD_AWAKE_MS 硬下限始终生效，故有效门限取其与 idle_s 之大者。 */
+    return bridge_mode_shallow_permitted();
 #endif
 }
 

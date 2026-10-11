@@ -9,7 +9,7 @@
 #include "bridge_types.h"
 
 #define BRIDGE_CFG_MAGIC     0x334Du   /* "3M" */
-#define BRIDGE_CFG_VERSION   3u
+#define BRIDGE_CFG_VERSION   4u
 
 /* SET_CONFIG（0x09）的 key */
 #define BRIDGE_CFG_KEY_REPORT_PERIOD  0x01u   /* value: u16 LE, ms */
@@ -31,6 +31,8 @@ typedef struct {
     uint8_t  conn_interval;
     uint8_t  battery_src;       /* BRIDGE_BATT_SRC_* */
     uint8_t  sleep_policy;      /* BRIDGE_SLEEP_POLICY_* */
+    uint16_t sleep_idle_s;      /* AUTO 策略：浅睡(IDLE)门限，单位 s，0=禁用自动浅睡 */
+    uint16_t sleep_deep_s;      /* AUTO 策略：深睡(DEEP)门限，单位 s，0=禁用自动深睡 */
     uint8_t  ble_name_len;      /* 有效长度 0..BRIDGE_NAME_MAX，0 = 用默认名 */
     uint8_t  usb_name_len;
     uint16_t usb_vid;
@@ -51,6 +53,8 @@ int  bridge_cfg_set_adv_name_mac(uint8_t en);
 int  bridge_cfg_set_conn_interval(uint8_t units_1p25ms);
 int  bridge_cfg_set_battery_src(uint8_t src);
 int  bridge_cfg_set_sleep_policy(uint8_t policy);
+/* AUTO 自动休眠策略下的时间门限（单位 s，0 = 禁用该项自动休眠），见 CMD_SLEEP_CFG */
+int  bridge_cfg_set_sleep_times(uint16_t idle_s, uint16_t deep_s);
 
 /* 可改写名称（target = BRIDGE_NAME_TARGET_*）；名称以字节计，不带 '\0' */
 int  bridge_cfg_set_name(uint8_t target, const uint8_t *name, uint8_t len);

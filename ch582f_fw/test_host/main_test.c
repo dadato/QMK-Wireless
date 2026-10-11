@@ -479,6 +479,10 @@ static void test_link_lost_to_sleep(void)
 {
     CASE("UART 失联 → 释放按键并休眠（规格 6.4；Dongle 无上游不睡）");
     reset_all();
+#if !BRIDGE_BOARD_IS_DONGLE
+    /* 默认已为 MANUAL（关闭自动休眠）：本用例验证 AUTO 策略下失联安全休眠 */
+    CHECK_EQ(bridge_cfg_set_sleep_policy(BRIDGE_SLEEP_POLICY_AUTO), BRIDGE_OK);
+#endif
     connect_radio();
 
     const uint8_t press[8] = { 0u, 0u, 0x04u, 0u, 0u, 0u, 0u, 0u };
@@ -786,7 +790,7 @@ static void test_unpair_radio_select(void)
         CHECK(pump_find(CMD_UNPAIR, &flags, pay, &len, 4u));
         CHECK_EQ(flags & BRIDGE_FLAG_ACK, BRIDGE_FLAG_ACK);
     }
-    CHECK_EQ(host_radio_unpair_count(2u), 4u);   /* BRIDGE_RADIO_2G4=2：0xFF 遍历 4 个 Profile */
+    CHECK_EQ(host_radio_unpair_count(2u), 1u);   /* BRIDGE_RADIO_2G4=2：0xFF 全清透传一次 */
     CHECK_EQ(host_radio_unpair_count(1u), 0u);   /* BRIDGE_RADIO_BLE = 1（不得误落） */
 }
 
@@ -839,25 +843,98 @@ static void test_pair_window_timeout(void)
     CHECK_EQ(host_radio_pair_stop_count(expect_radio), 1u);
 
 #if !BRIDGE_BOARD_IS_DONGLE
-    /* 2.4G 断链 → 配对窗口 → 超时回落后应能按期自动深睡
-     * （原缺陷：停在 2G4_PAIR 令 mode_is_paired_window 恒真，深睡门闩永不解除） */
+    /* 2.4G 已配对后掉线：不得重入配对窗口/重开广播，保持 MODE_2G4 并射频静默；
+     * AUTO 策略下无连接且空闲即按期自动深睡（不再经配对窗口超时回落路径）。 */
     reset_all();
-    host_radio_pair_stop_reset();
+    /* 默认已为 MANUAL（关闭自动休眠）：本用例验证 AUTO 策略下掉线自动深睡 */
+    CHECK_EQ(bridge_cfg_set_sleep_policy(BRIDGE_SLEEP_POLICY_AUTO), BRIDGE_OK);
     CHECK_EQ(bridge_mode_request(MODE_2G4, false), BRIDGE_OK);
     connect_radio();
     CHECK_EQ(bridge_mode_get(), MODE_2G4);
+    host_radio_pair_stop_reset();                       /* 断链前清零，单测断链静默动作 */
     bridge_mode_on_radio_event(BRIDGE_RADIO_EVT_DISCONNECTED);
-    CHECK_EQ(bridge_mode_get(), MODE_2G4_PAIR);
-
-    host_advance_ms((uint32_t)BRIDGE_PAIR_TIMEOUT_S * 1000u + 1000u);
-    bridge_mode_poll();
-    CHECK_EQ(bridge_mode_get(), MODE_2G4);
-    CHECK_EQ(host_radio_pair_stop_count(BRIDGE_RADIO_2G4), 1u);
+    CHECK_EQ(bridge_mode_get(), MODE_2G4);              /* 不重入配对窗口 */
+    CHECK_EQ(host_radio_pair_stop_count(BRIDGE_RADIO_2G4), 1u);   /* 停配对/广播，射频静默 */
 
     host_advance_ms((uint32_t)BRIDGE_IDLE_TO_SLEEP_S * 1000u + 1000u);
     bridge_mode_poll();
     CHECK_EQ(bridge_mode_get(), MODE_SLEEP);
 #endif
+}
+
+/* PAIR_START 持续时间参数 [duration_s LE16]（单位秒）：
+ *   省略（无载荷）= 回默认 BRIDGE_PAIR_TIMEOUT_S；0 = 窗口不自动关闭；
+ *   非 0/2 字节 → ERR PARAM（不进入配对窗口）。 */
+static void test_pair_duration(void)
+{
+    bridge_mode_t pair_mode;
+    bridge_mode_t fallback_mode;
+    uint8_t       expect_radio;
+    uint8_t       flags = 0u, pay[4], len = 0u;
+    uint8_t       dur[2];
+
+    CASE("PAIR_START 持续时间：短窗口超时 / 0=不自动关闭 / 非法长度");
+
+    reset_all();
+    host_radio_pair_stop_reset();
+    host_tx_reset();
+
+#if BRIDGE_BOARD_IS_DONGLE
+    pair_mode     = MODE_2G4_PAIR;
+    fallback_mode = MODE_2G4;
+    expect_radio  = BRIDGE_RADIO_2G4;
+#else
+    pair_mode     = MODE_BLE_PAIR;
+    fallback_mode = MODE_BLE;
+    expect_radio  = BRIDGE_RADIO_BLE;
+#endif
+
+    /* duration_s = 5：窗口 5s */
+    dur[0] = 5u; dur[1] = 0u;
+    run_cmd(CMD_PAIR_START, 0x70u, BRIDGE_FLAG_ACK_REQ, dur, 2u);
+    CHECK_EQ(bridge_mode_get(), pair_mode);
+
+    /* 4s（窗口内）仍停在配对模式 */
+    host_advance_ms(4000u);
+    bridge_mode_poll();
+    CHECK_EQ(bridge_mode_get(), pair_mode);
+    CHECK_EQ(host_radio_pair_stop_count(expect_radio), 0u);
+
+    /* 超过 5s：停配对窗口、回落非配对模式、上报 EVT_PAIR_RESULT(1) */
+    host_tx_reset();
+    host_advance_ms(2000u);
+    bridge_mode_poll();
+    CHECK(pump_find(EVT_PAIR_RESULT, &flags, pay, &len, 4u));
+    CHECK_EQ(pay[0], 1u);
+    CHECK_EQ(bridge_mode_get(), fallback_mode);
+    CHECK_EQ(host_radio_pair_stop_count(expect_radio), 1u);
+
+    /* duration_s = 0：不自动关闭窗口，长时间推进仍停在配对模式 */
+    reset_all();
+    host_radio_pair_stop_reset();
+    host_tx_reset();
+    dur[0] = 0u; dur[1] = 0u;
+    run_cmd(CMD_PAIR_START, 0x71u, BRIDGE_FLAG_ACK_REQ, dur, 2u);
+    CHECK_EQ(bridge_mode_get(), pair_mode);
+
+    host_advance_ms((uint32_t)(BRIDGE_PAIR_TIMEOUT_S + 30u) * 1000u);
+    bridge_mode_poll();
+    CHECK_EQ(bridge_mode_get(), pair_mode);          /* 0：不自动关闭 */
+    CHECK_EQ(host_radio_pair_stop_count(expect_radio), 0u);
+
+    /* 非法长度（1 字节）→ ERR PARAM，且不进入配对窗口 */
+    reset_all();
+    host_tx_reset();
+    {
+        uint8_t bad[1] = { 0x05u };
+
+        run_cmd(CMD_PAIR_START, 0x72u, BRIDGE_FLAG_ACK_REQ, bad, 1u);
+    }
+    CHECK(pump_find(CMD_PAIR_START, &flags, pay, &len, 4u));
+    CHECK_EQ(flags & BRIDGE_FLAG_ERR, BRIDGE_FLAG_ERR);
+    CHECK_EQ(pay[0], BRIDGE_ECODE_PARAM);
+    CHECK(bridge_mode_get() != MODE_BLE_PAIR);
+    CHECK(bridge_mode_get() != MODE_2G4_PAIR);
 }
 
 static void test_pair_and_unpair(void)
@@ -874,12 +951,12 @@ static void test_pair_and_unpair(void)
     CHECK_EQ(bridge_mode_get(), MODE_BLE_PAIR);
 #endif
 
-    /* 2.4G 断链后应回到 2.4G 配对窗口 */
+    /* 2.4G 已配对后掉线：保持常规模式、射频静默（不得重入配对窗口） */
     CHECK_EQ(bridge_mode_request(MODE_2G4, false), BRIDGE_OK);
     connect_radio();
     CHECK_EQ(bridge_mode_get(), MODE_2G4);
     bridge_mode_on_radio_event(BRIDGE_RADIO_EVT_DISCONNECTED);
-    CHECK_EQ(bridge_mode_get(), MODE_2G4_PAIR);
+    CHECK_EQ(bridge_mode_get(), MODE_2G4);
 
     bridge_mode_on_radio_event(BRIDGE_RADIO_EVT_PAIRED);
     CHECK_EQ(bridge_mode_get(), MODE_2G4);
@@ -1364,28 +1441,28 @@ static void test_get_ble_slots(void)
 /* 睡眠策略（SET_CONFIG key 0x06）：AUTO 自动休眠 / MANUAL 指令控制休眠 */
 static void test_sleep_policy(void)
 {
-    CASE("睡眠策略：AUTO 自动休眠 / MANUAL 仅指令控制休眠");
+    CASE("睡眠策略：默认 MANUAL 指令控制休眠 / AUTO 自动休眠");
     reset_all();
 
-    /* 默认 AUTO：恒许可休眠 */
-    CHECK_EQ(bridge_cfg_get()->sleep_policy, BRIDGE_SLEEP_POLICY_AUTO);
-    CHECK(bridge_mode_sleep_permitted());
+    /* 默认 MANUAL（关闭自动休眠）：未指令许可 → 不得休眠 */
+    CHECK_EQ(bridge_cfg_get()->sleep_policy, BRIDGE_SLEEP_POLICY_MANUAL);
+    CHECK(!bridge_mode_sleep_permitted());
 
-    /* SET_CONFIG(0x06) 切到 MANUAL（指令控制） */
+    /* SET_CONFIG(0x06) 切到 AUTO（自动休眠） */
     {
-        uint8_t pay[2] = { BRIDGE_CFG_KEY_SLEEP_POLICY, BRIDGE_SLEEP_POLICY_MANUAL };
+        uint8_t pay[2] = { BRIDGE_CFG_KEY_SLEEP_POLICY, BRIDGE_SLEEP_POLICY_AUTO };
         uint8_t flags = 0u;
 
         run_cmd(CMD_SET_CONFIG, 0x60u, BRIDGE_FLAG_ACK_REQ, pay, 2u);
         CHECK(pump_find(CMD_SET_CONFIG, &flags, 0, 0, 4u));
         CHECK_EQ(flags & BRIDGE_FLAG_ACK, BRIDGE_FLAG_ACK);
     }
-    CHECK_EQ(bridge_cfg_get()->sleep_policy, BRIDGE_SLEEP_POLICY_MANUAL);
-    CHECK(!bridge_mode_sleep_permitted());          /* 未指令许可 → 不得休眠 */
+    CHECK_EQ(bridge_cfg_get()->sleep_policy, BRIDGE_SLEEP_POLICY_AUTO);
+    CHECK(bridge_mode_sleep_permitted());           /* AUTO：恒许可休眠 */
 
     /* 掉电保持 */
     bridge_cfg_init();
-    CHECK_EQ(bridge_cfg_get()->sleep_policy, BRIDGE_SLEEP_POLICY_MANUAL);
+    CHECK_EQ(bridge_cfg_get()->sleep_policy, BRIDGE_SLEEP_POLICY_AUTO);
 
     /* GET_STATUS 回读策略字节（payload[4]） */
     {
@@ -1394,8 +1471,20 @@ static void test_sleep_policy(void)
         run_cmd(CMD_GET_STATUS, 0x61u, BRIDGE_FLAG_ACK_REQ, 0, 0u);
         CHECK(pump_find(CMD_GET_STATUS, &flags, pay, &len, 4u));
         CHECK_EQ(len, 5u);
-        CHECK_EQ(pay[4], BRIDGE_SLEEP_POLICY_MANUAL);
+        CHECK_EQ(pay[4], BRIDGE_SLEEP_POLICY_AUTO);
     }
+
+    /* 切回默认 MANUAL（指令控制），供后续 IDLE/WAKE/DEEP 子用例 */
+    {
+        uint8_t pay[2] = { BRIDGE_CFG_KEY_SLEEP_POLICY, BRIDGE_SLEEP_POLICY_MANUAL };
+        uint8_t flags = 0u;
+
+        run_cmd(CMD_SET_CONFIG, 0x66u, BRIDGE_FLAG_ACK_REQ, pay, 2u);
+        CHECK(pump_find(CMD_SET_CONFIG, &flags, 0, 0, 4u));
+        CHECK_EQ(flags & BRIDGE_FLAG_ACK, BRIDGE_FLAG_ACK);
+    }
+    CHECK_EQ(bridge_cfg_get()->sleep_policy, BRIDGE_SLEEP_POLICY_MANUAL);
+    CHECK(!bridge_mode_sleep_permitted());
 
     /* MANUAL：CMD_SLEEP(IDLE) 置位许可；CMD_SLEEP(WAKE) 清除 */
     {
@@ -1436,21 +1525,101 @@ static void test_sleep_policy(void)
     }
 
 #if !BRIDGE_BOARD_IS_DONGLE
-    /* AUTO：30s 无活动自动深睡；MANUAL：不自动进睡（仅指令控制） */
+    /* AUTO：30s 无活动自动深睡；MANUAL（默认）：不自动进睡（仅指令控制） */
     reset_all();
+    CHECK_EQ(bridge_cfg_set_sleep_policy(BRIDGE_SLEEP_POLICY_AUTO), BRIDGE_OK);
     host_advance_ms((uint32_t)(BRIDGE_IDLE_TO_SLEEP_S + 1u) * 1000u);
     bridge_mode_poll();
     CHECK_EQ(bridge_mode_get(), MODE_SLEEP);
 
     reset_all();
-    CHECK_EQ(bridge_cfg_set_sleep_policy(BRIDGE_SLEEP_POLICY_MANUAL), BRIDGE_OK);
     host_advance_ms((uint32_t)(BRIDGE_IDLE_TO_SLEEP_S + 1u) * 1000u);
+    bridge_mode_poll();
+    CHECK(bridge_mode_get() != MODE_SLEEP);          /* 默认 MANUAL：不自动进睡 */
+#endif
+
+    /* 复位回默认 MANUAL，避免影响后续用例 */
+    (void)bridge_cfg_set_sleep_policy(BRIDGE_SLEEP_POLICY_MANUAL);
+}
+
+/* SLEEP_CFG (0x25)：payload [idle_s LE16][deep_s LE16]，单位秒，落盘；
+ * 仅 AUTO 策略下生效，0 = 禁用对应级自动休眠。 */
+static void test_sleep_cfg(void)
+{
+    uint8_t flags = 0u, pay[6], len = 0u;
+
+    CASE("SLEEP_CFG 0x25：配置/落盘/字节序/非法长度 + AUTO 深睡门限");
+
+    reset_all();
+    /* 出厂默认：idle_s = 1（配合 port 1500ms 硬下限），deep_s = BRIDGE_IDLE_TO_SLEEP_S */
+    CHECK_EQ(bridge_cfg_get()->sleep_idle_s, 1u);
+    CHECK_EQ(bridge_cfg_get()->sleep_deep_s, (uint16_t)BRIDGE_IDLE_TO_SLEEP_S);
+
+    /* 配置 idle=5 / deep=7 → ACK */
+    {
+        uint8_t p[4] = { 5u, 0u, 7u, 0u };
+
+        run_cmd(CMD_SLEEP_CFG, 0x80u, BRIDGE_FLAG_ACK_REQ, p, 4u);
+        CHECK(pump_find(CMD_SLEEP_CFG, &flags, pay, &len, 4u));
+        CHECK_EQ(flags & BRIDGE_FLAG_ACK, BRIDGE_FLAG_ACK);
+    }
+    CHECK_EQ(bridge_cfg_get()->sleep_idle_s, 5u);
+    CHECK_EQ(bridge_cfg_get()->sleep_deep_s, 7u);
+
+    /* 落盘：重新初始化配置后仍保持 */
+    bridge_cfg_init();
+    CHECK_EQ(bridge_cfg_get()->sleep_idle_s, 5u);
+    CHECK_EQ(bridge_cfg_get()->sleep_deep_s, 7u);
+
+    /* 小端解析：idle = 0x0102(258) / deep = 0x0304(772) */
+    {
+        uint8_t p[4] = { 0x02u, 0x01u, 0x04u, 0x03u };
+
+        run_cmd(CMD_SLEEP_CFG, 0x81u, BRIDGE_FLAG_ACK_REQ, p, 4u);
+        CHECK(pump_find(CMD_SLEEP_CFG, &flags, pay, &len, 4u));
+        CHECK_EQ(flags & BRIDGE_FLAG_ACK, BRIDGE_FLAG_ACK);
+    }
+    CHECK_EQ(bridge_cfg_get()->sleep_idle_s, 258u);
+    CHECK_EQ(bridge_cfg_get()->sleep_deep_s, 772u);
+
+    /* 非法长度（3 字节）→ ERR PARAM，值不变 */
+    host_tx_reset();
+    {
+        uint8_t p[3] = { 1u, 0u, 0u };
+
+        run_cmd(CMD_SLEEP_CFG, 0x82u, BRIDGE_FLAG_ACK_REQ, p, 3u);
+    }
+    CHECK(pump_find(CMD_SLEEP_CFG, &flags, pay, &len, 4u));
+    CHECK_EQ(flags & BRIDGE_FLAG_ERR, BRIDGE_FLAG_ERR);
+    CHECK_EQ(pay[0], BRIDGE_ECODE_PARAM);
+    CHECK_EQ(bridge_cfg_get()->sleep_idle_s, 258u);
+    CHECK_EQ(bridge_cfg_get()->sleep_deep_s, 772u);
+
+#if !BRIDGE_BOARD_IS_DONGLE
+    /* AUTO + deep_s=5：空闲 4s 不睡、6s 进 MODE_SLEEP */
+    reset_all();
+    CHECK_EQ(bridge_cfg_set_sleep_times(1u, 5u), BRIDGE_OK);
+    CHECK_EQ(bridge_cfg_set_sleep_policy(BRIDGE_SLEEP_POLICY_AUTO), BRIDGE_OK);
+    host_advance_ms(4000u);
+    bridge_mode_poll();
+    CHECK(bridge_mode_get() != MODE_SLEEP);
+    host_advance_ms(3000u);
+    bridge_mode_poll();
+    CHECK_EQ(bridge_mode_get(), MODE_SLEEP);
+
+    /* AUTO + deep_s=0：禁用自动深睡，长时间空闲也不进睡 */
+    reset_all();
+    CHECK_EQ(bridge_cfg_set_sleep_times(1u, 0u), BRIDGE_OK);
+    CHECK_EQ(bridge_cfg_set_sleep_policy(BRIDGE_SLEEP_POLICY_AUTO), BRIDGE_OK);
+    host_advance_ms((uint32_t)(BRIDGE_IDLE_TO_SLEEP_S + 30u) * 1000u);
     bridge_mode_poll();
     CHECK(bridge_mode_get() != MODE_SLEEP);
 #endif
 
-    /* 复位回默认 AUTO，避免影响后续用例 */
-    (void)bridge_cfg_set_sleep_policy(BRIDGE_SLEEP_POLICY_AUTO);
+    /* 复位默认，避免影响后续用例 */
+    reset_all();
+    (void)bridge_cfg_set_sleep_times(1u, (uint16_t)BRIDGE_IDLE_TO_SLEEP_S);
+    (void)bridge_cfg_set_sleep_policy(BRIDGE_SLEEP_POLICY_MANUAL);
 }
 
 static void test_set_name_and_usb_id(void)
@@ -1668,6 +1837,7 @@ int main(void)
     test_pair_and_unpair();
     test_unpair_radio_select();
     test_pair_window_timeout();
+    test_pair_duration();
     test_sleep_wake_restore_mode();
     test_evt_state_ack_retry();
     test_hid_rejected_when_disconnected();
@@ -1676,6 +1846,7 @@ int main(void)
     test_misc_commands();
     test_get_ble_slots();
     test_sleep_policy();
+    test_sleep_cfg();
     test_fw_ota();
     test_set_name_and_usb_id();
     test_apply_ident_on_boot();

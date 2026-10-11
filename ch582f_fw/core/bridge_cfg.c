@@ -83,7 +83,9 @@ static void cfg_defaults(void)
     s_cfg.adv_name_with_mac = 1u;
     s_cfg.conn_interval    = 6u;   /* 6 * 1.25ms = 7.5ms */
     s_cfg.battery_src      = BRIDGE_BATT_SRC_AUTO;
-    s_cfg.sleep_policy     = BRIDGE_SLEEP_POLICY_AUTO;
+    s_cfg.sleep_policy     = BRIDGE_SLEEP_POLICY_MANUAL;   /* 默认关闭自动休眠：仅 CMD_SLEEP 指令控制 */
+    s_cfg.sleep_idle_s     = 1u;                            /* 1s：配合 port 层 1500ms 硬下限，保持原浅睡行为 */
+    s_cfg.sleep_deep_s     = BRIDGE_IDLE_TO_SLEEP_S;        /* 30s：未连接空闲达此秒数进深睡 */
     s_cfg.usb_vid          = (uint16_t)BRIDGE_USB_VID;
     s_cfg.usb_pid          = (uint16_t)BRIDGE_USB_PID;
     names_set_defaults();
@@ -244,6 +246,17 @@ int bridge_cfg_set_sleep_policy(uint8_t policy)
         return BRIDGE_OK;
     }
     s_cfg.sleep_policy = policy;
+    return cfg_store();
+}
+
+int bridge_cfg_set_sleep_times(uint16_t idle_s, uint16_t deep_s)
+{
+    /* 两字段均为「0 = 禁用该项自动休眠」，无其它非法取值 */
+    if (s_cfg.sleep_idle_s == idle_s && s_cfg.sleep_deep_s == deep_s) {
+        return BRIDGE_OK;
+    }
+    s_cfg.sleep_idle_s = idle_s;
+    s_cfg.sleep_deep_s = deep_s;
     return cfg_store();
 }
 

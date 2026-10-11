@@ -411,9 +411,11 @@ int port_set_usb_ids(uint16_t vid, uint16_t pid)
 #if BRIDGE_BOARD_IS_DONGLE
     return sdk_usb_set_ids(vid, pid);
 #else
-    (void)vid;
-    (void)pid;
-    return BRIDGE_ERR_UNSUPPORTED;      /* 键盘侧无 USB（core 会中继给 Dongle） */
+    /* 键盘侧无 USB，但 BLE HOGP 的 VID/PID 取自 DIS 的 PnP ID 特征值：
+     * 一并写入，使主机/VIA 识别到与键盘定义一致的标识。
+     * 仍返回 UNSUPPORTED，让 core 把该命令中继给 Dongle 改写其 USB 描述符。 */
+    (void)sdk_ble_set_ids(vid, pid);
+    return BRIDGE_ERR_UNSUPPORTED;
 #endif
 }
 

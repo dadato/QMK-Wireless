@@ -133,7 +133,7 @@ CH582F 模组 UART1 (PA8=RXD1 / PA9=TXD1)
 | `GET_STATUS` | `0x02` | — | `[mode u8][connected u8][profile u8][battery u8][sleep_policy u8]` | 状态快照 |
 | `SET_MODE` | `0x03` | `[mode u8][persist u8]` | — | 切模式（persist=1 落盘）；配对窗口 `2`/`4` 被拒 → `ERR(PARAM)`，改用 `PAIR_START` |
 | `SET_PROFILE` | `0x04` | `[profile u8]` | — | 切 BLE 主机槽位 1..4 |
-| `PAIR_START` | `0x05` | — | — | 进入配对窗口（限时 `BRIDGE_PAIR_TIMEOUT_S`=60s，超时自动停窗口并回 `EVT_PAIR_RESULT(1)`） |
+| `PAIR_START` | `0x05` | `[duration_s u16 LE]`（可选，缺省=60s） | — | 进入配对窗口（限时 `duration_s` 秒，超时自动停窗口并回 `EVT_PAIR_RESULT(1)`；`duration_s=0`=不自动关闭；payload 非 0/2 字节 → `ERR(PARAM)`） |
 | `UNPAIR` | `0x06` | `[profile u8]`（`0xFF`=全清） | —（随后 `EVT_STATE`） | 解绑 |
 | `ENTER_BOOT` | `0x08` | — | ACK（随后跳 bootloader） | 进 ROM ISP 量产烧录；先回 ACK，约 60ms 后释放 HID 并 `port_enter_bootloader()` |
 | `SET_CONFIG` | `0x09` | `[key u8][value...]` | — | 写配置（见 4.8） |
@@ -147,11 +147,12 @@ CH582F 模组 UART1 (PA8=RXD1 / PA9=TXD1)
 | `NV_READ` | `0x1B` | `[addr u8]` | `[addr u8][data 32B]` | 读用户 NV 单元 |
 | `SET_BATTERY` | `0x1C` | `[percent u8]` | —（随后 `EVT_STATE`） | 注入电量 |
 | `SLEEP` | `0x1D` | `[level u8]` | — | `0`=唤醒 / `1`=浅睡 / `2`=深睡 |
+| `SLEEP_CFG` | `0x25` | `[idle_s u16 LE][deep_s u16 LE]` | — | 配置 AUTO 策略自动休眠门限（单位 s，落盘）：`idle_s`=距最近串口接收活动达该秒数后允许浅睡（0=禁用自动浅睡）；`deep_s`=未连接且空闲达该秒数后进深睡（0=禁用自动深睡）；`len≠4` → `ERR(PARAM)` |
 | `GET_ADC` | `0x1E` | — | `[mv u16 LE]` | 采集电压 |
 | `SET_NAME` | `0x1F` | `[target u8][name...]` | — | 改名（`target` 0=BLE 广播名 / 1=Dongle USB 名，经 2.4G 转发） |
 | `SET_USB_ID` | `0x20` | `[vid u16 LE][pid u16 LE]` | — | 改写 USB 标识（Dongle 侧重枚举） |
-| `GET_DIAG` | `0x2A` | — | `[0]up [1]conn [2]bound [3]tx_busy [4]tx_q_cnt [5]hb_miss [6..7]report_period [8..9]tx_submit_ok [10..11]tx_submit_fail [12..13]tx_done_ok [14..15]tx_done_fail [16..17]tx_timeout [18..19]rx_any [20..21]hop_shut [22..23]rx_data_bad`（`[6..23]` 均 LE16） | 2.4G 射频诊断快照（24B，排障用） |
-| `HID_DIAG` | `0x2B` | — | `[0]reg [1..2]hid_handle [3..4]map_handle [5..6]raw_in_handle [7..8]raw_out_handle [9]report_cnt [10]attr_cnt [11]reset_src [12]stage_prev [13]stage_now`（`[1..8]` 均 LE16） | BLE HID 服务注册取证（14B，排障用）：`reg`=`GATTServApp_RegisterService` 返回值（`0`=成功/`0xFF`=未调用）；`raw_in/out_handle`=RID5 IN/OUT 属性 handle；仅键盘模组支持，Dongle 侧 → `ERR(STATE)` |
+| `GET_DIAG` | `0x2A` | — | `[0]up [1]conn [2]bound [3]tx_busy [4]tx_q_cnt [5]hb_miss [6..7]report_period [8..9]tx_submit_ok [10..11]tx_submit_fail [12..13]tx_done_ok [14..15]tx_done_fail [16..17]tx_drop [18..19]rx_any [20..21]rx_pair [22..23]rx_data_bad`（`[6..23]` 均 LE16） | 2.4G 射频诊断快照（24B，排障用） |
+| `HID_DIAG` | `0x2B` | — | `[0]reg [1..2]hid_handle [3..4]map_handle [5..6]raw_in_handle [7..8]raw_out_handle [9]report_cnt [10]attr_cnt [11]reset_src [12]stage_prev [13]stage_now [14..17]notify_fail [18..21]notify_retry_ok [22..25]notify_retry_drop`（`[1..8]` 均 LE16；`[14..25]` 均 uint32 LE） | BLE HID 服务注册取证（26B，排障用）：`reg`=`GATTServApp_RegisterService` 返回值（`0`=成功/`0xFF`=未调用）；`raw_in/out_handle`=RID5 IN/OUT 属性 handle；`[14..25]` 为出站 notify 计数（`HidDev_Report` 失败 / 延迟重发成功 / 延迟重发仍失败）；仅键盘模组支持，Dongle 侧 → `ERR(STATE)` |
 | `PING` | `0x7F` | — | `EVT_PONG`（`flags=ACK`） | 心跳/往返 |
 | `FW_BEGIN/DATA/END/ABORT` | `0x21~0x24` | 见 [ota_web SPEC §4.6](file:///c:/Users/Administrator/Desktop/qmk/qmk_firmware/wireless/ch582f_fw/board/ota_web/SPEC.md) | — | 仅保留「调试/引用」，升级流程由 `ota_web` 承担 |
 
@@ -210,7 +211,7 @@ CH582F 模组 UART1 (PA8=RXD1 / PA9=TXD1)
 - **名称目标**：`0`=BLE / `1`=USB。
 - **EVT_ERROR / ERR 帧码**：`0x01` CRC / `0x02` UART_LOST / `0x03` RADIO / `0x04` PAIR / `0x05` ACK_TIMEOUT / `0x06` PARAM / `0x07` STATE / `0x08` ROLLOVER。
 - **返回码**：`-1` BUSY / `-2` GAP / `-3` DUP / `-4` PARAM / `-5` STATE / `-6` VBUS / `-7` UNSUPPORTED / `-8` IO / `-9` CRC。
-- **用户 NV**：62 个单元 × 32B（单元号 0..61；越界 → `ERR(PARAM)`）。
+- **用户 NV**：46 个单元 × 32B（单元号 0..45；越界 → `ERR(PARAM)`）。
 
 ### 4.11 报文示例
 
@@ -369,7 +370,7 @@ GET_STATUS  请求：AA 55 00 02 05 00                      CRC16
 | 串口波特率 | 921600（默认；可选 19200/38400/43000/57600/76800/115200/128000/230400/460800/921600/1843200/3686400/7372800） | 是（仅连接前） |
 | 本机心跳间隔 | 1000ms（默认停发） | 是（高级） |
 | 命令 ACK 超时 / 重试 | 600ms / 1 | 是（高级） |
-| VIA 自检超时 / 重试 | 800ms / 1 | 是（VIA 测试 Tab） |
+| VIA 自检超时 / 重试 | 3000ms / 2 | 是（VIA 测试 Tab） |
 | 打字速率 | 12 字符/秒 | 是 |
 | 按键保持时长 | 15ms | 是 |
 

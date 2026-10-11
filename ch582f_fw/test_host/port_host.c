@@ -261,14 +261,16 @@ int port_radio_set_report_period_ms(uint8_t mode, uint16_t ms)
     return BRIDGE_OK;
 }
 
-/* 建链取证快照：主机侧桩返回全 0（诊断仅用于真机取证） */
+/* 建链取证快照：主机侧桩返回全 0（诊断仅用于真机取证）。
+ * 长度须与真机一致 = 42B（24B 基础 + 18B UART 接收腿取证），否则 core 侧
+ * handle_get_diag 以 42B 布局转发时字段会错位。 */
 int port_radio_diag(uint8_t *out, uint8_t *out_len)
 {
     if (out == 0 || out_len == 0) {
         return BRIDGE_ERR_PARAM;
     }
-    memset(out, 0, 24u);
-    *out_len = 24u;
+    memset(out, 0, 42u);
+    *out_len = 42u;
     return BRIDGE_OK;
 }
 

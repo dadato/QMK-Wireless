@@ -216,11 +216,11 @@ REPORT_LEN = {
 }
 
 # 用户 NV（bridge_config.h「应用 NV 全槽分配」：64 槽 × 64B）
-#   1..3=配置 / 4..24=多主机 / 25..55=用户 / 56..59=BLE SNV / 60..63=预留
+#   1..3=配置 / 4=多主机索引表 / 5..24=预留 / 25..47=用户 / 48..63=BLE SNV
 NV_UNIT = 32
 NV_USER_BASE = 25
-NV_SNV_LO = 56
-NV_USER_UNITS = (NV_SNV_LO - NV_USER_BASE) * (64 // NV_UNIT)  # 62 单元 = 1984B
+NV_SNV_LO = 48
+NV_USER_UNITS = (NV_SNV_LO - NV_USER_BASE) * (64 // NV_UNIT)  # 46 单元 = 1472B
 
 # 定频测试（bridge_test.h）
 TEST_CH_MAX = 39

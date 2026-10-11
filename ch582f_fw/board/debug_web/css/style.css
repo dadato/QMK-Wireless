@@ -231,6 +231,9 @@ input[type=checkbox] { accent-color: var(--accent); }
 .keycell input { accent-color: var(--accent); }
 .modrow { display: flex; gap: 10px; flex-wrap: wrap; }
 .progress-line { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.progress-wrap { margin: 8px 0 2px; display: flex; flex-direction: column; gap: 4px; }
+.progress-bar { height: 8px; background: var(--card-2); border: 1px solid var(--line); border-radius: 5px; overflow: hidden; }
+.progress-fill { height: 100%; width: 0; background: var(--accent); transition: width .12s linear; }
 
 /* ---------------- 场景 ---------------- */
 .scn-list { display: flex; flex-direction: column; gap: 10px; }

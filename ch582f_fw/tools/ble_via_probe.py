@@ -240,7 +240,15 @@ def run_both(port: str, baud: int) -> int:
     _set_mode(client, proto.MODE_2G4)
     ok, st = _wait_wl(client, proto.WL_2G4_LINKED)
     if not ok:
-        print(f"  未连接（{st}），尝试 pair_start …")
+        # 键盘若仍记得旧绑定（bound=1），配对窗口里不会再发 PAIR_REQ，链路僵死；
+        # 须先 UNPAIR 清绑定（当前模式=2G4，UNPAIR 才会落到 2.4G 射频），
+        # 再 pair_start → 键盘发 PAIR_REQ → Dongle 无条件回 PAIR_RESP 重建绑定。
+        print(f"  未连接（{st}），先 UNPAIR 清旧绑定再 pair_start …")
+        try:
+            client.unpair(0xFF)
+        except Exception as e:  # noqa: BLE001
+            print(f"  unpair err: {e}")
+        time.sleep(0.3)
         try:
             client.pair_start()
         except Exception as e:  # noqa: BLE001

@@ -37,6 +37,10 @@
   function hex2(n) { return (n & 0xFF).toString(16).toUpperCase().padStart(2, '0'); }
   function hex4(n) { return (n & 0xFFFF).toString(16).toUpperCase().padStart(4, '0'); }
   function u16le(p, i) { return ((p[i] || 0) | ((p[i + 1] || 0) << 8)) & 0xFFFF; }
+  function u32le(p, i) {
+    return ((p[i] || 0) | ((p[i + 1] || 0) << 8) |
+      ((p[i + 2] || 0) << 16) | ((p[i + 3] || 0) << 24)) >>> 0;
+  }
   function macStr(p) {
     var s = [];
     for (var i = 0; i < 6; i++) { s.push(hex2(p[i] || 0)); }
@@ -100,7 +104,9 @@
       ' txDone=' + d.txDoneOk + '/' + d.txDoneFail + ' timeout=' + d.txTimeout +
       ' rxAny=' + d.rxAny + ' hopShut=' + d.hopShut + ' rxBad=' + d.rxDataBad;
   }
-  /* HID_DIAG 应答：14B BLE HID 服务注册取证（bridge_ble_hidsvc.c；[1..8] 均 LE16） */
+  /* HID_DIAG 应答：26B BLE HID 服务注册取证（bridge_ble_hidsvc.c；[1..8] 均 LE16；
+   * [14..25] 为 3 个 uint32(LE) 出站 notify 计数：fail/retryOk/retryDrop。
+   * 兼容旧固件仅回前 14B：此时 hasNotify=false，计数默认 0。） */
   function decodeHidDiag(p) {
     var reg = p[0];
     return {
@@ -110,16 +116,22 @@
       rawInHandle: u16le(p, 5), rawOutHandle: u16le(p, 7),
       reportCnt: p[9] || 0, attrCnt: p[10] || 0,
       resetSrc: (p[11] || 0) & 0x07,
-      stagePrev: p[12] || 0, stageNow: p[13] || 0
+      stagePrev: p[12] || 0, stageNow: p[13] || 0,
+      hasNotify: (p.length || 0) >= 26,
+      notifyFail: u32le(p, 14), notifyRetryOk: u32le(p, 18), notifyRetryDrop: u32le(p, 22)
     };
   }
   /* HID 服务取证 → 单行摘要 */
   function hidDiagText(d) {
-    return 'reg=' + (d.reg === 0xFF ? '未调用(0xFF)' : ('0x' + hex2(d.reg))) +
+    var s = 'reg=' + (d.reg === 0xFF ? '未调用(0xFF)' : ('0x' + hex2(d.reg))) +
       ' hid=0x' + hex4(d.hidHandle) + ' map=0x' + hex4(d.mapHandle) +
       ' rawIn=0x' + hex4(d.rawInHandle) + ' rawOut=0x' + hex4(d.rawOutHandle) +
       ' reports=' + d.reportCnt + ' attrs=' + d.attrCnt +
       ' reset=' + d.resetSrc + ' stage=' + d.stagePrev + '→' + d.stageNow;
+    if (d.hasNotify) {
+      s += ' notifyFail=' + d.notifyFail + ' retryOk=' + d.notifyRetryOk + ' retryDrop=' + d.notifyRetryDrop;
+    }
+    return s;
   }
 
   /* ---------------- 事件 ---------------- */

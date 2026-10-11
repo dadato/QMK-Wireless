@@ -650,7 +650,7 @@ LD 文件约束（与规格 10.4 对应）：
 | M1 | `bridge_uart` + `bridge_proto` 骨架 | 串口助手回环，命令/应答/CRC 正确 |
 | M2 | `bridge_hid` + `bridge_ble` 单主机透传 | 打字母，PC 正确输入 |
 | M3 | `bridge_mode` 状态机 + 多主机切换 | 4 主机切换无卡键 |
-| M4 | `bridge_rf24`（厂商用例并入）+ Dongle 配对 | 2.4G 端到端延迟 ≤8ms（D14）；确认厂商用例可配 1ms 射频上报 |
+| M4 | `bridge_rf24`（厂商用例并入）+ Dongle 配对 | 2.4G 端到端延迟往返 ≤10ms / 上行 ≤4ms（D14）；确认厂商用例可配 1ms 射频上报 |
 | M5 | `bridge_power` 休眠 + 电量 | 待机电流、电量上报正确 |
 | M6 | **常驻 BOOT OTA（Stage 暂存 + 搬运）+ 异常处理 + 看门狗** | 升级成功进新应用；故意断电后上电自动重试搬运；取消/超时回退原 App；ROM ISP 兜底可恢复 |
 | M7 | 与 SK32 联调 | 通过规格第 14 章全部 KPI；**专项：连续快速打字 10 秒无滞后/无丢键（D14 带宽验证）** |
@@ -772,11 +772,10 @@ make -C wireless/ch582f_fw/test_host DONGLE=1 test # dongle 角色
 - `LIB_FLASH_BASE_ADDRESSS` 必须与所选 `LIBCH58xBLE.a` 一致（配错会上电即崩）
 - 2.4G `sdk_rf24_*` **已落地**（`bridge_rf24_ch58x.c`）：按厂商 `RF_PHY` 例程
   `RF_Config` + `RF_Tx`/`RF_Rx`/`RF_Shut`，TMOS 任务上下文投递，1s 心跳 + 连续 3 次无收断链；
-  保持 `LLE_MODE_AUTO`。**WCH 硬件跳频已启用**（`BRIDGE_FEATURE_RF24_HOP=1`，见 §12.6）：
-  `RF_FrequencyHoppingTx/Rx` 是 TX 全通道遍历 / RX 单频点监听的非对称骨架、API 不带应用载荷，
-  本桥在其上**叠加自实现的载荷承载**（键盘=initiator 只发，空闲 10ms 轮询；Dongle=responder
-  只收，下行经 `RF_Rx` 的自动 ACK 载荷回传），跳频同步以**外部 32.768kHz LSE**
-  （Makefile `CLK_OSC32K=0`，D15）为基准，双芯同源不失步；`core` 无需改动
+  保持 `LLE_MODE_AUTO`。**WCH 硬件跳频未启用**（`BRIDGE_FEATURE_RF24_HOP=0`，见 §12.6）：
+  厂商 `RF_FrequencyHoppingTx/Rx` 是 TX 全通道遍历 / RX 单频点监听的非对称骨架、API 不带应用载荷，
+  无法承载本桥双向数据面，故保持**固定信道**（`RF24_CHANNEL`）；该宏仅作将来接入自定义跳频的
+  预留开关。`core` 无需改动
 - **2.4G 配对 / 绑定已落地**（见 §12.6「2.4G 配对 / 绑定」）：数据面帧升级为
   `[type][link_id LE(2)][seq][payload]`（帧级序号去重，结论3），未绑定设备数据帧互不可达
   （防同环境多套串扰），绑定信息（密钥 + 对端 ID + 随机数）掉电保存（NV 槽 `BRIDGE_NV_ID_RF24_BOND`），
@@ -820,21 +819,21 @@ make -C wireless/ch582f_fw/test_host DONGLE=1 test # dongle 角色
 - **外部电量**：`CMD_SET_BATTERY` 0x1C（cycle 内下发电量百分比）或
   `SET_CONFIG` key 0x05 置 `BRIDGE_BATT_SRC_EXTERNAL`(2)；`bridge_power.c` 在
   `AUTO` 下"外部有效则用外部"，在 `EXTERNAL` 下仅用 SK32 上传值，本地 ADC 不参与。
-- **2.4G 跳频：已启用**（`BRIDGE_FEATURE_RF24_HOP=1`）。厂商 `RF_PHY_Hop` 例程中
-  `RF_FrequencyHoppingTx(resendCount)` / `RF_FrequencyHoppingRx(timeoutMS)` 均**不带应用载荷**，
-  是 TX 端每周期全通道遍历、RX 端每周期单频点监听的非对称骨架；本桥在其上**叠加自实现的载荷承载**
-  ——键盘=initiator（只发，空闲 10ms 轮询 `RF_Tx`）、Dongle=responder（只收，下行经 `RF_Rx` 的
-  自动 ACK 载荷回传），`LLE_MODE_AUTO` 自动 ACK/重传。跳频同步以**外部 32.768kHz LSE**
-  （Makefile `CLK_OSC32K=0`，D15）为基准，双芯同源不失步；`core` 不改。
-  - **更正**：早期文档误记 LSE「可选未接」，据此得出「硬件跳频不可行」的结论**作废**——本板
-    已实装 LSE，硬件跳频可行且已落地（`bridge_rf24_ch58x.c`，参照工程 3modekbd 同方向）。
-  - **对照参照工程 3modekbd（结论2/5）**：该工程在重传之上**叠加跳频**（`HopPeriod=16`）+ 2M PHY；
-    本工程已按同方向启用硬件跳频（`HopPeriod=16`），PHY 仍取 1M（理由见下条）。
-  - **PHY 速率 A/B（结论5，已实测定论）**：曾按参照工程切 `LLE_MODE_PHY_2M`，soak 10000
-    往返丢包 **1.67%**（`tx_done_fail≈53k`，首次 TX 大量失败、全靠重传兜底）；回退
-    `LLE_MODE_PHY_1M` 后丢包 **0.85%**（`tx_done_fail≈2k`）。2M 空口时间虽减半，但接收
-    灵敏度约降 ~3dB，在**无跳频的固定信道**上是负优化，故**保留 1M PHY**；跳频启用后仍保留 1M，
-    2M 留待后续再评估。两端须同步（双端同码）。
+- **2.4G 跳频：未启用**（`BRIDGE_FEATURE_RF24_HOP=0`，`RF24_HOP_PERIOD=0`，仅作将来接入自定义跳频的
+  预留开关）。厂商 `RF_PHY_Hop` 例程中 `RF_FrequencyHoppingTx(resendCount)` /
+  `RF_FrequencyHoppingRx(timeoutMS)` 均**不带应用载荷**，是 TX 端每周期全通道遍历、RX 端每周期
+  单频点监听的**非对称单向**骨架；WCH 官方（论坛 thread-132278）明确「一跳多的绑定/跳频/透传需
+  自己写算法」。故本层保持**固定信道**（`RF24_CHANNEL`）+ `LLE_MODE_AUTO` 自动 ACK/重传，
+  以重传 + 帧级序号去重 + 绑定派生 AA 实现抗干扰，`core` 不改。
+  - **更正**：早期文档记为「跳频已启用（=1）、HopPeriod=16」，与代码不符——`bridge_rf24_ch58x.c`
+    实际 `cfg.HopPeriod=RF24_HOP_PERIOD=0`、`cfg.HopIndex=0`，运行时 diag `hop=0`，该结论作废。
+  - **LSE**：外部 32.768kHz 晶振（`CLK_OSC32K=0`，D15）作 RTC / TMOS 时基使用；同步跳频若将来
+    实现，可再以其为同步基准（当前无此用途）。
+  - **PHY 速率 A/B（结论5，已实测定论）**：现采用 `LLE_MODE_PHY_2M`（`bridge_rf24_ch58x.c`，**双端同码**）。
+    早期曾按参照工程切 2M 得到丢包 **1.67%**（`tx_done_fail≈53k`，首次 TX 大量失败、全靠重传兜底）、
+    回退 1M 后 0.85%，故结论为「2M 负优化、保留 1M」——**该结论作废**：彼时尚未落地帧级序号去重 +
+    抢收自愈修复，重传导致的重复/丢帧未被正确统计。修复后复测 2M 往返丢包 **0.01%**（优于 1M 的 0.02%）、
+    往返 8.6ms / 上行 3.6ms，2M 空口时间减半正式生效。
 - **2.4G 配对 / 绑定**（`core/bridge_rf24pair.{c,h}` + `bridge_rf24_ch58x.c` 帧层）：
   - 帧格式：数据面 `[type][link_id LE(2)][seq][payload]`（线上帧头 4B）；`link_id` = `CRC16(绑定密钥)`，
     配对帧 `link_id=0xFFFF`。收包侧在 RF 层校验：未绑定 / 密钥不符的帧丢弃且**不刷新心跳**

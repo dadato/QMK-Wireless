@@ -5,6 +5,7 @@
 #include "bridge_log.h"
 #include "bridge_proto.h"
 #include "bridge_test.h"
+#include "bridge_uart.h"
 
 #define BRIDGE_MOD_MODE "mode"
 
@@ -17,6 +18,7 @@ static bool          s_radio_up;
 static bool          s_sleep_permit_cmd;   /* MANUAL 策略下由 CMD_SLEEP(IDLE/DEEP) 置位 */
 static bool          s_host_awake = true;  /* 主机电源状态：true=运行/false=挂起 */
 static uint32_t      s_pair_started_ms;    /* 配对窗口起始时刻（超时判定用） */
+static uint16_t      s_pair_timeout_s;     /* 配对窗口持续时间（秒），0=不自动关闭 */
 
 const char *bridge_mode_name(bridge_mode_t mode)
 {
@@ -114,11 +116,12 @@ static int mode_transaction(bridge_mode_t target, bool persist)
             return BRIDGE_ERR_IO;
         }
         s_radio_up = true;
+        /* 广播/可配对只在显式配对窗口存在：常规无线模式（BLE/2.4G）永不广播，
+         * 使已配对设备掉线（主机关闭蓝牙 / Dongle 关闭）后模块不再回到可配对状态。
+         * BLE 常规模式所用槽地址已由 GAPROLE_STARTED(sdk_ble_gap_ready) 应用，
+         * 无需再借 connect_profile 重开广播。 */
         if (mode_is_paired_window(target)) {
             (void)port_radio_pair_start(radio);
-        } else if (radio == BRIDGE_RADIO_BLE) {
-            const bridge_cfg_t *cfg = bridge_cfg_get();
-            (void)port_radio_connect_profile(radio, cfg->ble_profile);
         }
     }
 
@@ -156,6 +159,7 @@ void bridge_mode_init(void)
 
     s_last_activity_ms = port_millis();
     s_pair_started_ms  = port_millis();
+    s_pair_timeout_s   = BRIDGE_PAIR_TIMEOUT_S;
     s_radio_up         = false;
     s_connected        = false;
     s_vbus             = port_vbus_present();
@@ -309,21 +313,22 @@ void bridge_mode_on_radio_event(uint8_t evt)
                 s_mode = MODE_2G4;
                 (void)bridge_cfg_set_mode((uint8_t)MODE_2G4);
             }
+            /* 已连接即撤下广播/配对意图：否则链路随后中断时协议栈会在 GAPROLE_WAITING
+             * 自动重开广播，令已配对设备掉线瞬间又进入可配对状态。 */
+            (void)port_radio_pair_stop(radio_of(s_mode));
             break;
 
         case BRIDGE_RADIO_EVT_DISCONNECTED:
             bridge_hid_release_all();
             s_connected = false;
             bridge_hid_note_link(false);
+            /* 已配对后掉线（主机关闭蓝牙 / Dongle 关闭等）：保持当前常规模式、射频静默，
+             * 绝不重开广播或重入配对窗口——广播/可配对只在显式配对窗口存在（PAIR_START）。
+             * 2.4G 由心跳/link_id 校验在对端恢复时自动重连；BLE 需重新 PAIR_START 重连。 */
             if (!mode_is_paired_window(s_mode)) {
-                /* 已连接模式下断链 → 回配对窗口（2.4G）或重连（BLE） */
-                if (s_mode == MODE_2G4) {
-                    s_mode = MODE_2G4_PAIR;
-                    (void)port_radio_pair_start(BRIDGE_RADIO_2G4);
-                    pair_window_stamp();
-                } else if (s_mode == MODE_BLE) {
-                    (void)port_radio_connect_profile(
-                        BRIDGE_RADIO_BLE, bridge_cfg_get()->ble_profile);
+                uint8_t r = radio_of(s_mode);
+                if (r != BRIDGE_RADIO_NONE) {
+                    (void)port_radio_pair_stop(r);
                 }
             }
             break;
@@ -384,6 +389,31 @@ void bridge_mode_sleep_permit(bool en)
     s_sleep_permit_cmd = en;
 }
 
+bool bridge_mode_shallow_permitted(void)
+{
+    /* 主机挂起：许可浅睡（保持链路等待恢复），与 sleep_permitted 一致 */
+    if (!s_host_awake) {
+        return true;
+    }
+    if (bridge_cfg_get()->sleep_policy != BRIDGE_SLEEP_POLICY_AUTO) {
+        return s_sleep_permit_cmd;      /* MANUAL：仅指令许可 */
+    }
+    /* AUTO：需距最近一次串口接收活动达 sleep_idle_s 秒；0 = 禁用自动浅睡。
+     * 判据用 bridge_uart_rx_gap_ms()（仅由 UART 接收刷新），不可用 idle_ms
+     * （BLE 连接事件会持续刷新）。port 层另有 BRIDGE_RX_HOLD_AWAKE_MS 硬下限，
+     * 故有效门限 = max(BRIDGE_RX_HOLD_AWAKE_MS, sleep_idle_s*1000)。 */
+    uint16_t idle_s = bridge_cfg_get()->sleep_idle_s;
+    if (idle_s == 0u) {
+        return false;
+    }
+    return bridge_uart_rx_gap_ms() >= (uint32_t)idle_s * 1000u;
+}
+
+void bridge_mode_set_pair_timeout(uint16_t s)
+{
+    s_pair_timeout_s = s;
+}
+
 void bridge_mode_set_host_awake(bool awake)
 {
     if (s_host_awake == awake) {
@@ -423,10 +453,12 @@ void bridge_mode_poll(void)
     /* 配对窗口超时：窗口内未配对成功则停配对动作并回落到对应非配对无线模式
      * （BLE_PAIR→BLE / 2G4_PAIR→2G4）。复用 EVT_PAIR_RESULT(1) 上报一次瞬时的
      * 「配对失败/超时」事件。回落同时解除 mode_is_paired_window() 对自动深睡的
-     * 门闩，使 2.4G 在超时且无连接时也能按期深睡（原缺陷：停在 2G4_PAIR 永不深睡）。 */
-    if (mode_is_paired_window(s_mode) &&
+     * 门闩，使 2.4G 在超时且无连接时也能按期深睡（原缺陷：停在 2G4_PAIR 永不深睡）。
+     * 持续时间由 PAIR_START 的可选参数设置（bridge_mode_set_pair_timeout），
+     * 0 = 不自动关闭（窗口恒开，仅连接成功或显式切模式退出）。 */
+    if (mode_is_paired_window(s_mode) && s_pair_timeout_s != 0u &&
         (uint32_t)(port_millis() - s_pair_started_ms) >=
-            (uint32_t)BRIDGE_PAIR_TIMEOUT_S * 1000u) {
+            (uint32_t)s_pair_timeout_s * 1000u) {
         uint8_t       r        = radio_of(s_mode);
         bridge_mode_t fallback = (s_mode == MODE_BLE_PAIR) ? MODE_BLE : MODE_2G4;
 
@@ -446,13 +478,17 @@ void bridge_mode_poll(void)
      * 仅「自动」策略下自动深睡；「指令控制」策略下不自动进睡，
      * 深睡只由 CMD_SLEEP(DEEP) 显式触发。 */
 #if !BRIDGE_BOARD_IS_DONGLE
-    if (bridge_cfg_get()->sleep_policy == BRIDGE_SLEEP_POLICY_AUTO &&
-        s_mode != MODE_SLEEP && !mode_is_paired_window(s_mode) &&
-        !bridge_mode_is_connected() &&
-        bridge_mode_idle_ms() >= (uint32_t)BRIDGE_IDLE_TO_SLEEP_S * 1000u) {
-        LOG_I(BRIDGE_MOD_MODE, "idle %lus -> sleep",
-              (unsigned long)(bridge_mode_idle_ms() / 1000u));
-        (void)mode_transaction(MODE_SLEEP, false);
+    {
+        const bridge_cfg_t *cfg = bridge_cfg_get();
+        if (cfg->sleep_policy == BRIDGE_SLEEP_POLICY_AUTO &&
+            cfg->sleep_deep_s != 0u &&
+            s_mode != MODE_SLEEP && !mode_is_paired_window(s_mode) &&
+            !bridge_mode_is_connected() &&
+            bridge_mode_idle_ms() >= (uint32_t)cfg->sleep_deep_s * 1000u) {
+            LOG_I(BRIDGE_MOD_MODE, "idle %lus -> sleep",
+                  (unsigned long)(bridge_mode_idle_ms() / 1000u));
+            (void)mode_transaction(MODE_SLEEP, false);
+        }
     }
 #endif
 }

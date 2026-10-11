@@ -45,9 +45,14 @@ int      port_radio_set_report_period_ms(uint8_t mode, uint16_t ms);
  * sdk_rf24_diag）；非 2.4G 平台返回 UNSUPPORTED。 */
 int      port_radio_diag(uint8_t *out, uint8_t *out_len);
 
-/* BLE HID 服务注册取证（仅诊断，11B，布局见 port/ch58x/bridge_ble_hidsvc.c 的
+/* BLE HID 服务注册取证（仅诊断，32B，布局见 port/ch58x/bridge_ble_hidsvc.c 的
  * port_hid_diag）：out[0]=注册返回值(0xFF=未调用)，随后 4 个 uint16(LE) 句柄
- * （服务/ReportMap/vendor IN/vendor OUT），out[9]=报表条数，out[10]=属性表项数。
+ * （服务/ReportMap/vendor IN/vendor OUT），out[9]=报表条数，out[10]=属性表项数，
+ * out[11]=复位源，out[12]/out[13]=面包屑(prev/now)；
+ * out[14..17]/out[18..21]/out[22..25] = 3 个 uint32(LE) 出站 notify 计数：
+ * fail(HidDev_Report 失败) / retry_ok(延迟重发成功) / retry_drop(延迟重发仍失败)；
+ * out[26]=最近断链 LL reason，out[27]=终止事件本地角色，
+ * out[28..29]=已建立累计次数，out[30..31]=已终止累计次数（均 16 位 LE）。
  * 仅键盘侧有意义；Dongle 侧返回 BRIDGE_OK + 全 0/0xFF。 */
 int      port_hid_diag(uint8_t *out, uint8_t *out_len);
 

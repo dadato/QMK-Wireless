@@ -84,9 +84,14 @@
     var fr = await this.link.request(F.CMD.SET_PROFILE, Uint8Array.of(profile & 0xFF));
     return { frame: fr, text: '已切换 BLE 槽位 ' + profile };
   };
-  Commands.prototype.pairStart = async function () {
-    var fr = await this.link.request(F.CMD.PAIR_START);
-    return { frame: fr, text: '已进入配对窗口（等待 EVT_PAIR_RESULT）' };
+  Commands.prototype.pairStart = async function (duration) {
+    if (duration === undefined || duration === null || duration === '') {
+      var fr = await this.link.request(F.CMD.PAIR_START);
+      return { frame: fr, text: '已进入配对窗口，持续时间用默认值（等待 EVT_PAIR_RESULT）' };
+    }
+    var d = duration & 0xFFFF;
+    var fr = await this.link.request(F.CMD.PAIR_START, Uint8Array.of(d & 0xFF, (d >> 8) & 0xFF));
+    return { frame: fr, text: '已进入配对窗口，持续时间 ' + d + 's' + (d === 0 ? '（不自动关闭）' : '') + '（等待 EVT_PAIR_RESULT）' };
   };
   Commands.prototype.unpair = async function (profile) {
     var p = (profile === undefined) ? 0xFF : profile;
@@ -141,6 +146,12 @@
     var names = { 0: '唤醒', 1: '浅睡', 2: '深睡' };
     return { frame: fr, text: '睡眠分级 ' + (names[level] || level) + ' 已下发' };
   };
+  Commands.prototype.sleepCfg = async function (idleS, deepS) {
+    var i = idleS & 0xFFFF, d = deepS & 0xFFFF;
+    var fr = await this.link.request(F.CMD.SLEEP_CFG,
+      Uint8Array.of(i & 0xFF, (i >> 8) & 0xFF, d & 0xFF, (d >> 8) & 0xFF));
+    return { frame: fr, text: '睡眠时间已配置 IDLE=' + i + 's / DEEP=' + d + 's（0=禁用该项自动休眠，仅 AUTO 策略生效）' };
+  };
   Commands.prototype.nvWrite = async function (addr, data) {
     if (data.length !== F.NV_UNIT) {
       throw new F.BridgeError('NV 单元必须 ' + F.NV_UNIT + 'B，当前 ' + data.length + 'B');
@@ -169,7 +180,7 @@
   Commands.prototype.setUsbId = async function (vid, pid) {
     var p = Uint8Array.of(vid & 0xFF, (vid >> 8) & 0xFF, pid & 0xFF, (pid >> 8) & 0xFF);
     var fr = await this.link.request(F.CMD.SET_USB_ID, p);
-    return { frame: fr, text: 'USB 标识已改写（Dongle 侧重枚举）' };
+    return { frame: fr, text: 'USB 标识已改写（Dongle 侧重枚举；键盘侧同步写 BLE DIS PnP ID）' };
   };
 
   /* ---------------- 危险操作 ---------------- */
@@ -303,7 +314,7 @@
           fields: [],
           run: async function (c) { var d = await c.getDiag(); return { text: D.diagText(d), frame: d.frame }; } },
         { id: 'hid_diag', label: 'HID_DIAG', cmd: F.CMD.HID_DIAG,
-          desc: '读取 BLE HID 服务注册取证（14B，排障用）。\n请求：无 payload。\n应答：ACK + 14B：[0]reg（GATTServApp_RegisterService 返回值，0=成功/0xFF=未调用）[1..2]hid_handle [3..4]map_handle [5..6]raw_in_handle(RID5 IN) [7..8]raw_out_handle(RID5 OUT)（[1..8] 均 LE16）[9]report_cnt [10]attr_cnt [11]reset_src(R8_RESET_STATUS&0x07) [12]stage_prev [13]stage_now。\n错误码：仅键盘模组支持；Dongle 侧返回 ERR STATE(0x07)。',
+          desc: '读取 BLE HID 服务注册取证（26B，排障用）。\n请求：无 payload。\n应答：ACK + 26B：[0]reg（GATTServApp_RegisterService 返回值，0=成功/0xFF=未调用）[1..2]hid_handle [3..4]map_handle [5..6]raw_in_handle(RID5 IN) [7..8]raw_out_handle(RID5 OUT)（[1..8] 均 LE16）[9]report_cnt [10]attr_cnt [11]reset_src(R8_RESET_STATUS&0x07) [12]stage_prev [13]stage_now；[14..17]/[18..21]/[22..25] 为 3 个 uint32(LE) 出站 notify 计数：fail(HidDev_Report 失败)/retry_ok(延迟重发成功)/retry_drop(延迟重发仍失败)。\n错误码：仅键盘模组支持；Dongle 侧返回 ERR STATE(0x07)。',
           fields: [],
           run: async function (c) { var d = await c.hidDiag(); return { text: D.hidDiagText(d), frame: d.frame }; } },
         { id: 'ping', label: 'PING', cmd: F.CMD.PING,
@@ -327,9 +338,10 @@
           { key: 'profile', label: '槽位', type: 'number', def: '1', min: 1, max: 4 }
         ], run: function (c, v) { return c.setProfile(parseInt(v.profile, 10)); } },
         { id: 'pair_start', label: 'PAIR_START', cmd: F.CMD.PAIR_START,
-          desc: '进入配对窗口，按当前射频方向配对。\n请求：无 payload。\n现象：窗口 60s 超时 → EVT_PAIR_RESULT(fail) + 回落（BLE_PAIR→BLE / 2G4_PAIR→2G4）；成功 → EVT_PAIR_RESULT(ok)。\n错误码：有 VBUS → STATE；其他失败 → PAIR。',
-          fields: [],
-          run: function (c) { return c.pairStart(); } },
+          desc: '进入配对窗口，按当前射频方向配对。\n请求：[duration_s LE16]（可选，单位 s）。\n  duration_s：窗口持续时间秒数；缺省=编译期默认 60s；0=不自动关闭（无限等待，需手动 SET_MODE 退出）；>0=超时自动回落。\n现象：窗口超时 → EVT_PAIR_RESULT(fail) + 回落（BLE_PAIR→BLE / 2G4_PAIR→2G4）；成功 → EVT_PAIR_RESULT(ok)。\n错误码：有 VBUS → STATE；payload 非 0/2 字节 → PARAM；其他失败 → PAIR。',
+          fields: [
+          { key: 'duration_s', label: '持续时间s(空=默认,0=不关闭)', type: 'number', def: '', min: 0, max: 65535 }
+        ], run: function (c, v) { var s = v.duration_s; return c.pairStart(s === '' || s === undefined ? undefined : parseInt(s, 10)); } },
         { id: 'unpair', label: 'UNPAIR', cmd: F.CMD.UNPAIR, dangerous: true,
           desc: '解绑已配对设备（先回 ACK，再下发 EVT_STATE）。\n请求：[profile]（0~1B，破坏性）。\nprofile 取值：1..4=仅清除指定设备槽；0xFF=清除全部绑定（1..4）；无 payload 缺省 0xFF。\n错误码：无专用。',
           confirm: 'UNPAIR 将解除绑定；0xFF 会清除全部配对。确认发送？', fields: [
@@ -398,15 +410,21 @@
           fields: [
           { key: 'level', label: '分级', type: 'select', def: '1', options: [['0', '0 = WAKE'], ['1', '1 = IDLE（缺省）'], ['2', '2 = DEEP']] }
         ], run: function (c, v) { return c.sleep(parseInt(v.level, 10)); } },
-        { id: 'nv_read', label: 'NV_READ', cmd: F.CMD.NV_READ,
-          desc: '读用户 NV 单元。\n请求：[addr]（1B）。\naddr 取值：0..61（0x00..0x3D），共 62 个单元 × 32B。\n应答：ACK + 33B [addr][data0..31]。\n边界：len<1 或 addr≥62 → PARAM；底层读失败 → STATE。',
+        { id: 'sleep_cfg', label: 'SLEEP_CFG', cmd: F.CMD.SLEEP_CFG,
+          desc: '配置自动休眠（AUTO 策略）的时间门限，落盘保存。\n请求：[idle_s LE16][deep_s LE16]（各 2B，单位 s）。\n  idle_s：距最近一次串口接收活动达该秒数后允许浅睡（IDLE，保持链路）；0=禁用自动浅睡。\n  deep_s：未连接且空闲达该秒数后进深睡（DEEP，断连）；0=禁用自动深睡。\n边界：len≠4 → PARAM；仅 sleep_policy=AUTO 时生效（MANUAL 仅响应 SLEEP 指令）。\n默认：idle_s=1 / deep_s=30。',
           fields: [
-          { key: 'addr', label: '单元 (0..61)', type: 'number', def: '0', min: 0, max: 61 }
+          { key: 'idle_s', label: 'IDLE 门限s (0=禁用)', type: 'number', def: '1', min: 0, max: 65535 },
+          { key: 'deep_s', label: 'DEEP 门限s (0=禁用)', type: 'number', def: '30', min: 0, max: 65535 }
+        ], run: function (c, v) { return c.sleepCfg(parseInt(v.idle_s, 10), parseInt(v.deep_s, 10)); } },
+        { id: 'nv_read', label: 'NV_READ', cmd: F.CMD.NV_READ,
+          desc: '读用户 NV 单元。\n请求：[addr]（1B）。\naddr 取值：0..45（0x00..0x2D），共 46 个单元 × 32B。\n应答：ACK + 33B [addr][data0..31]。\n边界：len<1 或 addr≥46 → PARAM；底层读失败 → STATE。',
+          fields: [
+          { key: 'addr', label: '单元 (0..45)', type: 'number', def: '0', min: 0, max: 45 }
         ], run: async function (c, v) { var r = await c.nvRead(parseInt(v.addr, 10)); return { text: 'NV[' + r.addr + '] ' + F.bytesToHex(r.data), frame: r.frame }; } },
         { id: 'nv_write', label: 'NV_WRITE', cmd: F.CMD.NV_WRITE,
-          desc: '写 32B 用户 NV 单元（读改写整槽）。\n请求：33B [addr][data32]。\naddr 取值：0..61（0x00..0x3D），共 62 个单元。\n边界：len≠33 或 addr≥62 → PARAM。',
+          desc: '写 32B 用户 NV 单元（读改写整槽）。\n请求：33B [addr][data32]。\naddr 取值：0..45（0x00..0x2D），共 46 个单元。\n边界：len≠33 或 addr≥46 → PARAM。',
           fields: [
-          { key: 'addr', label: '单元 (0..61)', type: 'number', def: '0', min: 0, max: 61 },
+          { key: 'addr', label: '单元 (0..45)', type: 'number', def: '0', min: 0, max: 45 },
           { key: 'data', label: '数据(32B hex)', type: 'hex', def: '00112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF', maxBytes: 32 }
         ], run: function (c, v) { return c.nvWrite(parseInt(v.addr, 10), F.hexToBytes(v.data)); } },
         { id: 'set_name', label: 'SET_NAME', cmd: F.CMD.SET_NAME,
@@ -416,13 +434,16 @@
           { key: 'name', label: '名称(≤21B)', type: 'text', def: 'SK32-KB', maxlength: 21 }
         ], run: function (c, v) { return c.setName(parseInt(v.target, 10), v.name); } },
         { id: 'set_usb_id', label: 'SET_USB_ID', cmd: F.CMD.SET_USB_ID,
-          desc: '设置 USB VID/PID（本地不支持时经 2.4G 中继到对端）。\n请求：必须 4B [vid_lo][vid_hi][pid_lo][pid_hi]（均 LE16）。\n边界：len≠4 或 vid==0 或 pid==0 → PARAM。\n缺省：VID=0x0194 / PID=0x0463。',
+          desc: '设置 USB VID/PID。\nDongle 侧：改写 USB 描述符并重枚举；键盘模组侧：本地同步改写 BLE DIS PnP ID' +
+                '（主机 BLE 读到的 VID/PID，需移除设备后重新配对才刷新），并回 UNSUPPORTED 由 core 经 2.4G 中继到 Dongle。\n' +
+                '请求：必须 4B [vid_lo][vid_hi][pid_lo][pid_hi]（均 LE16）。\n' +
+                '边界：len≠4 或 vid==0 或 pid==0 → PARAM。\n' +
+                'LD7 键盘标识：VID=0x0194 / PID=0x0464（本地按 LE 打包上送）。',
           fields: [
-          { key: 'vid', label: 'VID(hex LE)', type: 'hex', def: '0194', maxBytes: 2 },
-          { key: 'pid', label: 'PID(hex LE)', type: 'hex', def: '0463', maxBytes: 2 }
+          { key: 'vid', label: 'VID(hex)', type: 'hex', def: '0194', maxBytes: 2 },
+          { key: 'pid', label: 'PID(hex)', type: 'hex', def: '0464', maxBytes: 2 }
         ], run: function (c, v) {
-          var vb = F.hexToBytes(v.vid), pb = F.hexToBytes(v.pid);
-          return c.setUsbId((vb[0] | (vb[1] << 8)) & 0xFFFF, (pb[0] | (pb[1] << 8)) & 0xFFFF);
+          return c.setUsbId(parseInt(v.vid, 16) & 0xFFFF, parseInt(v.pid, 16) & 0xFFFF);
         } },
         { id: 'set_test_mode', label: 'SET_TEST_MODE', cmd: F.CMD.SET_TEST_MODE,
           desc: 'SRRC 定频发射测试（编译开关 BRIDGE_FEATURE_SRRC_TEST 已开）。\n请求：[mode][channel][power]。\nmode 取值：0 = 退出（未激活时幂等 OK）/ 1 = 进入。\nchannel 取值：0..39（0=2402MHz，步进 2MHz，39=2480MHz）。\npower 取值：0 = 0dBm / 1 = 3dBm / 2 = 4dBm / 3 = 6dBm。\n边界：mode∉{0,1} / channel>39 / power>3 → PARAM。',

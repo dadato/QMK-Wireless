@@ -46,6 +46,11 @@ uint8_t  sdk_uart1_rx_bytes(void);            /* R8_UART1_RFC：RX FIFO 中可�
 uint8_t  sdk_uart1_rx_read(void);             /* R8_UART1_RBR */
 uint8_t  sdk_uart1_iir(void);                 /* R8_UART1_IIR：读后清中断 */
 uint8_t  sdk_uart1_lsr(void);                 /* R8_UART1_LSR：读后清溢出/帧错（LINE_STAT） */
+/* R8_UART1_LSR 位掩码（见 CH583SFR.h / CH58x_uart.h，收侧使能 LINE_STAT）。
+ * 用于把 ISR 观测到的「线路状态错误」分类计数，定位字节级丢失根因。 */
+#define SDK_UART1_LSR_OVER_ERR   0x02u        /* RB_LSR_OVER_ERR：接收 FIFO 溢出（overrun） */
+#define SDK_UART1_LSR_PAR_ERR    0x04u        /* RB_LSR_PAR_ERR ：校验错 */
+#define SDK_UART1_LSR_FRAME_ERR  0x08u        /* RB_LSR_FRAME_ERR：帧错（stop bit / 断线） */
 /* Sleep 期间 UART 不能唤醒内核：把 RXD1(PA8) 叠加为下降沿 GPIO 唤醒源。
  * 引脚保持 UART 复用不变；由端口层在进睡窗口内开关（避免清醒期每字节中断）。 */
 void     sdk_uart1_rx_wake_enable(bool en);
@@ -106,6 +111,13 @@ int      sdk_ble_deinit(void);                /* 停广播 + 断开连接（协�
 /* 发送 HOGP Input Report：rid = BRIDGE_HID_RID_*（见 bridge_ble_hidsvc.h），
  * 载荷不含 Report ID（Report ID 由 GATT Report Reference 描述符告知主机）。 */
 int      sdk_ble_hid_send(uint8_t rid, const uint8_t *d, uint8_t len);
+/* 出站 notify 瞬态失败的诊断计数与延迟重试（见 bridge_ch58x_sdk.c）：
+ * 主循环每轮调 sdk_ble_notify_poll() 补发上一轮失败的暂存帧；
+ * *_count()（32 位）供 port_hid_diag 读出，用于区分模组侧丢帧与主机侧丢弃。 */
+void     sdk_ble_notify_poll(void);
+uint32_t sdk_ble_notify_fail_count(void);
+uint32_t sdk_ble_notify_retry_ok_count(void);
+uint32_t sdk_ble_notify_retry_drop_count(void);
 bool     sdk_ble_is_connected(void);
 int      sdk_ble_pair_start(uint16_t timeout_s);   /* 开广播 / 进入配对窗口 */
 int      sdk_ble_pair_stop(void);                  /* 关广播 / 结束配对窗口 */
@@ -116,6 +128,7 @@ void     sdk_ble_gap_ready(void);                  /* GAPROLE_STARTED 后应用�
 int      sdk_ble_set_conn_interval(uint8_t units_1p25ms);
 int      sdk_ble_set_adv_name_with_mac(bool en);   /* 广播名是否带 MAC 后缀 */
 int      sdk_ble_set_adv_name(const uint8_t *name, uint8_t len); /* 广播名（CMD_SET_NAME target=BLE） */
+int      sdk_ble_set_ids(uint16_t vid, uint16_t pid); /* 写 BLE DIS PnP ID（CMD_SET_USB_ID 同步） */
 int      sdk_ble_test_mode(uint8_t mode, uint8_t channel, uint8_t power); /* SRRC 定频 */
 uint8_t  sdk_ble_protocol_ver(void);
 
@@ -136,6 +149,8 @@ uint8_t  sdk_rf24_protocol_ver(void);
  * [5]=hb_miss [6..7]=report_period LE16，随后 8 个 LE16 计数依次为
  * tx_submit_ok/tx_submit_fail/tx_done_ok/tx_done_fail/tx_drop/rx_any/rx_pair/rx_data_bad。*/
 int      sdk_rf24_diag(uint8_t *out, uint8_t *out_len);
+/* 接收邮箱覆写（静默丢帧）累计次数（32 位，供 Dongle OTA GET_DIAG2 读取）。 */
+uint32_t sdk_rf24_rx_overwrite(void);
 
 /* ---------------- USB（仅 Dongle 侧） ---------------- */
 int      sdk_usb_init(void);
@@ -146,6 +161,9 @@ int      sdk_usb_set_product_name(const uint8_t *name, uint8_t len);
 int      sdk_usb_set_ids(uint16_t vid, uint16_t pid);
 /* 透传（VIA Raw HID）：Dongle → 上位机的 32B Raw HID 报文 */
 int      sdk_usb_tunnel_send(const uint8_t *d, uint8_t len);
+/* EP3 上行软件队列取证计数：入队总数 / 队满丢帧 / 队列占用高水位（任一指针可为 NULL）。
+ * 高水位 ≥2 即证明曾有「上一包未被主机取走又来一帧」——旧实现会在此静默丢帧。 */
+void     sdk_usb_ep3_stats(uint32_t *pushed, uint32_t *q_drop, uint8_t *hwm);
 
 /* USB 远程唤醒（2.4G Dongle → 主机）：主机关闭 USB 前会先下发
  * SET_FEATURE(DEVICE_REMOTE_WAKEUP)；挂起期间收到键盘报文且已获许可时，

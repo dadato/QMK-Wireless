@@ -860,6 +860,7 @@
       setResult($('viaBleResult'), '当前浏览器不支持 WebHID（需 Chrome/Edge，且为安全上下文）', 'err');
       viaLog('WARN', 'WebHID 不可用，通路 B（BLE 模组）已禁用');
     }
+    updateSoakButtons();
   })();
 
   async function viaHidToggle() {
@@ -872,6 +873,7 @@
       btn.textContent = '连接 Dongle';
       $('viaHidRun').disabled = true;
       $('viaHidDiag').disabled = true;
+      updateSoakButtons();
       viaLog('INFO', 'WebHID 已断开');
       return;
     }
@@ -885,6 +887,7 @@
         $('viaHidConn').textContent = '连接 Dongle';
         $('viaHidRun').disabled = true;
         $('viaHidDiag').disabled = true;
+        updateSoakButtons();
       }
     });
     try {
@@ -896,6 +899,7 @@
       btn.textContent = '断开';
       $('viaHidRun').disabled = false;
       $('viaHidDiag').disabled = false;
+      updateSoakButtons();
       viaLog('OK', 'WebHID 已连接：' + (dev.productName || '(未命名设备)'));
     } catch (e) {
       if (e && e.name === 'NotFoundError') { viaLog('WARN', '已取消选择 Dongle，未连接'); }
@@ -918,6 +922,7 @@
       setResult($('viaBleResult'), '已断开', '');
       btn.textContent = '连接 BLE 模组';
       $('viaBleRun').disabled = true;
+      updateSoakButtons();
       viaLog('INFO', 'WebHID（BLE 模组）已断开');
       return;
     }
@@ -930,6 +935,7 @@
         setResult($('viaBleResult'), '设备已断开', 'err');
         $('viaBleConn').textContent = '连接 BLE 模组';
         $('viaBleRun').disabled = true;
+        updateSoakButtons();
       }
     });
     try {
@@ -940,6 +946,7 @@
       setResult($('viaBleResult'), '已连接：' + (dev.productName || dev.name || 'BLE 模组'), 'ok');
       btn.textContent = '断开';
       $('viaBleRun').disabled = false;
+      updateSoakButtons();
       viaLog('OK', 'WebHID（BLE 模组）已连接：' + (dev.productName || dev.name || '(未命名设备)'));
     } catch (e) {
       if (e && e.name === 'NotFoundError') { viaLog('WARN', '已取消选择 BLE 模组，未连接'); }
@@ -1038,6 +1045,96 @@
   $('viaHidDiag').addEventListener('click', function () { viaHidDiagRun(); });
   $('viaBleConn').addEventListener('click', function () { viaBleToggle(); });
   $('viaBleRun').addEventListener('click', function () { viaRun(viaBle, $('viaBleResult'), $('viaBleRun')); });
+
+  /* ---- 批量稳定性测试（通路 A/B，默认 10000 次） ---- */
+  var viaSoakCancelled = false;
+  var viaSoakRunning = false;
+
+  /** 依据两条通路的连接态与运行态刷新按钮使能 */
+  function updateSoakButtons() {
+    var aOk = !!(viaHid && viaHid.isConnected());
+    var bOk = !!(viaBle && viaBle.isConnected());
+    $('viaSoakRunA').disabled = viaSoakRunning || !aOk;
+    $('viaSoakRunB').disabled = viaSoakRunning || !bOk;
+    $('viaSoakStop').disabled = !viaSoakRunning;
+  }
+
+  function fmtMs(v) { return (v === null || v === undefined) ? '—' : (Math.round(v * 100) / 100) + 'ms'; }
+  function fmtPct(v) { return (v === null || v === undefined) ? '—' : (v * 100).toFixed(3) + '%'; }
+
+  async function runSoak(which) {
+    var transport = (which === 'A') ? viaHid : viaBle;
+    var resEl = $('viaSoakResult');
+    var barEl = $('viaSoakBar');
+    var progEl = $('viaSoakProgress');
+    var label = (which === 'A') ? '通路 A（2.4G）' : '通路 B（BLE）';
+    if (!transport || !transport.isConnected()) { setResult(resEl, '设备未连接', 'err'); return; }
+
+    var count = parseInt($('viaSoakCount').value, 10) || 10000;
+    var gapMs = parseInt($('viaSoakGap').value, 10);
+    if (isNaN(gapMs)) { gapMs = 1; }
+    var timeoutMs = parseInt($('viaSoakTimeout').value, 10) || 800;
+
+    viaSoakCancelled = false;
+    viaSoakRunning = true;
+    updateSoakButtons();
+    viaBadge($('viaSoakState'), '运行中', 'warn');
+    barEl.style.width = '0%';
+    progEl.textContent = '0 / ' + count;
+    setResult(resEl, label + ' 批量测试中（' + count + ' 次 · 间隔 ' + gapMs + 'ms · 单次超时 ' + timeoutMs + 'ms）…', '');
+    viaLog('INFO', '开始批量稳定性测试：' + label + '，共 ' + count + ' 次');
+
+    var lastPaint = 0;
+    function paint(p) {
+      var now = Date.now();
+      if (p.done < p.total && now - lastPaint < 40) { return; }   /* 节流，避免 10000 次刷屏 */
+      lastPaint = now;
+      barEl.style.width = (p.done / p.total * 100).toFixed(2) + '%';
+      progEl.textContent = p.done + ' / ' + p.total +
+        '（成功 ' + p.ok + ' · 丢包 ' + p.loss + ' · 异常 ' + p.bad + ' · 错序 ' + p.stale + '）';
+    }
+
+    try {
+      var r = await Via.soak(transport, {
+        count: count,
+        gapMs: gapMs,
+        timeoutMs: timeoutMs,
+        isCancelled: function () { return viaSoakCancelled; },
+        onProgress: paint
+      });
+      barEl.style.width = (r.done / r.total * 100).toFixed(2) + '%';
+      progEl.textContent = r.done + ' / ' + r.total +
+        '（成功 ' + r.ok + ' · 丢包 ' + r.loss + ' · 异常 ' + r.bad + ' · 错序 ' + r.stale + '）';
+      var rate = r.elapsedMs > 0 ? (r.done / (r.elapsedMs / 1000)) : 0;
+      var lines = [
+        '结果: ' + (r.cancelled ? '已停止' : '完成') + ' ' + r.done + '/' + r.total + ' 次',
+        '成功: ' + r.ok + ' · 丢包: ' + r.loss + ' · 丢包率: ' + fmtPct(r.lossRate),
+        '异常回包: ' + r.bad + ' · 错序/重复: ' + r.stale,
+        'RTT: min ' + fmtMs(r.rtt.min) + ' · 均值 ' + fmtMs(r.rtt.mean) + ' · 中位 ' + fmtMs(r.rtt.median),
+        '     P95 ' + fmtMs(r.rtt.p95) + ' · P99 ' + fmtMs(r.rtt.p99) + ' · max ' + fmtMs(r.rtt.max),
+        '用时: ' + (r.elapsedMs / 1000).toFixed(2) + 's · 速率: ' + rate.toFixed(1) + ' 次/s'
+      ];
+      setResult(resEl, lines.join('\n'), (r.loss === 0 && r.bad === 0) ? 'ok' : 'err');
+      viaLog((r.loss === 0 && r.bad === 0) ? 'OK' : 'WARN',
+        label + ' 批量测试：' + r.done + ' 次，丢包 ' + r.loss + '（' + fmtPct(r.lossRate) + '），' +
+        'RTT 均值 ' + fmtMs(r.rtt.mean) + ' / P95 ' + fmtMs(r.rtt.p95) + (r.cancelled ? '（已停止）' : ''));
+      viaBadge($('viaSoakState'), r.cancelled ? '已停止' : '完成', (r.loss === 0 && r.bad === 0) ? 'pass' : 'fail');
+    } catch (e) {
+      setResult(resEl, '失败：' + e.message, 'err');
+      viaLog('ERR', '批量测试失败：' + e.message);
+      viaBadge($('viaSoakState'), '失败', 'fail');
+    } finally {
+      viaSoakRunning = false;
+      updateSoakButtons();
+    }
+  }
+
+  $('viaSoakRunA').addEventListener('click', function () { runSoak('A'); });
+  $('viaSoakRunB').addEventListener('click', function () { runSoak('B'); });
+  $('viaSoakStop').addEventListener('click', function () {
+    viaSoakCancelled = true;
+    viaLog('WARN', '批量测试：请求停止…');
+  });
 
   /* ============================ LD7 键盘 VIA 数据模拟（通路 C：经串口扮演 SK32/LD7） ============================ */
 

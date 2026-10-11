@@ -193,6 +193,23 @@ static uint8_t  s_ep2_q_cnt;
 
 static uint32_t s_hid_q_drop;      /* 队满丢帧计数（观测用；>0 说明主机取走速率低于上报速率） */
 
+/* ---- EP3（VIA Raw HID 上行）软件 TX 队列 ----
+ * 旧实现（sdk_usb_tunnel_send）在 EP3 仍处于 ACK（上一包未被主机取走）时直接返回
+ * BRIDGE_ERR_IO，调用方 bridge_ch58x_radio_tunnel_in() 丢弃返回值 → 该帧静默消失。
+ * 2.4G soak 实测上行突发丢帧即源于此：射频已收到并回 ACK，但主机取走前又到一帧，
+ * EP3 单缓冲（USB_DeviceInit 未置 RB_UEP3_BUF_MOD）装不下 → 丢。
+ * 改为入队 + IN 完成中断排空（与 EP1/EP2 同构），队满才丢（计 s_ep3_q_drop）；
+ * s_ep3_q_hwm 记录队列占用高水位：≥2 即说明确有帧被旧实现丢弃、被本队列挽救。 */
+#define USB_EP3_SLOT      32u
+#define USB_EP3_Q_DEPTH   16u
+
+static uint8_t  s_ep3_q[USB_EP3_Q_DEPTH][USB_EP3_SLOT];
+static uint8_t  s_ep3_q_head;
+static uint8_t  s_ep3_q_cnt;
+static uint8_t  s_ep3_q_hwm;       /* 队列占用高水位（观测） */
+static uint32_t s_ep3_pushed;      /* 入队总数（观测） */
+static uint32_t s_ep3_q_drop;      /* 队满丢帧（真丢） */
+
 static bool usb_ep_in_busy(uint8_t ep)
 {
     uint8_t ctrl = (ep == 1u) ? R8_UEP1_CTRL : R8_UEP2_CTRL;
@@ -264,6 +281,46 @@ static void usb_hid_q_reset(void)
     s_ep2_q_head = 0u;
     s_ep2_q_cnt  = 0u;
     s_hid_q_drop = 0u;
+    s_ep3_q_head = 0u;
+    s_ep3_q_cnt  = 0u;
+    s_ep3_q_hwm  = 0u;
+    /* s_ep3_pushed / s_ep3_q_drop 为累计观测计数，跨重枚举保留不清零 */
+}
+
+/* EP3 IN 是否有在飞包（T_RES==ACK 表示已就绪等待主机取走） */
+static bool usb_ep3_busy(void)
+{
+    return ((R8_UEP3_CTRL & MASK_UEP_T_RES) == UEP_T_RES_ACK);
+}
+
+static void usb_ep3_drain(void)
+{
+    if (s_ep3_q_cnt == 0u || usb_ep3_busy()) {
+        return;
+    }
+    memcpy(pEP3_IN_DataBuf, s_ep3_q[s_ep3_q_head], USB_EP3_SLOT);
+    s_ep3_q_head = (uint8_t)((s_ep3_q_head + 1u) % USB_EP3_Q_DEPTH);
+    s_ep3_q_cnt--;
+    DevEP3_IN_Deal(USB_EP3_SLOT);
+}
+
+static void usb_ep3_push(const uint8_t *d, uint8_t len)
+{
+    uint8_t slot;
+
+    if (s_ep3_q_cnt >= USB_EP3_Q_DEPTH) {
+        s_ep3_q_head = (uint8_t)((s_ep3_q_head + 1u) % USB_EP3_Q_DEPTH);
+        s_ep3_q_cnt--;
+        s_ep3_q_drop++;
+    }
+    slot = (uint8_t)((s_ep3_q_head + s_ep3_q_cnt) % USB_EP3_Q_DEPTH);
+    memset(s_ep3_q[slot], 0, USB_EP3_SLOT);
+    memcpy(s_ep3_q[slot], d, len);
+    s_ep3_q_cnt++;
+    s_ep3_pushed++;
+    if (s_ep3_q_cnt > s_ep3_q_hwm) {
+        s_ep3_q_hwm = s_ep3_q_cnt;
+    }
 }
 
 /* ============================ 控制传输状态 ============================ */
@@ -368,9 +425,10 @@ void USB_DevTransProcess(void)
                 }
                 break;
 
-            case UIS_TOKEN_IN | 3:          /* EP3 IN：Raw HID 上行已取走 */
+            case UIS_TOKEN_IN | 3:          /* EP3 IN：Raw HID 上行已取走 → 排空下一帧 */
                 R8_UEP3_CTRL ^= RB_UEP_T_TOG;
                 R8_UEP3_CTRL = (uint8_t)((R8_UEP3_CTRL & ~MASK_UEP_T_RES) | UEP_T_RES_NAK);
+                usb_ep3_drain();
                 break;
 
             default:
@@ -673,6 +731,7 @@ void USB_DevTransProcess(void)
 #define BRIDGE_OTA_SUB_FW_END    0x04u
 #define BRIDGE_OTA_SUB_FW_ABORT  0x05u
 #define BRIDGE_OTA_SUB_GET_INFO  0x06u
+#define BRIDGE_OTA_SUB_GET_DIAG2 0x07u   /* 2.4G 上行丢帧取证：EP3 队列 / 收包覆写 32 位计数 */
 #define BRIDGE_OTA_MODE_APP      0x00u   /* GET_INFO.mode：0=App / 1=IAP */
 #define BRIDGE_OTA_HID_CHUNK     24u     /* FW_DATA 单帧有效数据：32 − magic3 − sub1 − off4 */
 
@@ -715,6 +774,34 @@ static void usb_ota_get_info(void)
     usb_ota_reply(0u, r, (uint8_t)(7u + n));
 }
 
+/* GET_DIAG2：2.4G 上行丢帧取证（32 位计数，不饱和/不回绕，适合 10 万帧长跑）。
+ * 布局（usb_ota_reply 前置 1B status 之后）：[0..3]=ep3_pushed LE32
+ * [4..7]=ep3_q_drop LE32 [8]=ep3_q_hwm u8 [9..12]=rf24_rx_overwrite LE32。 */
+static void usb_ota_get_diag2(void)
+{
+    uint32_t pushed = 0u, qdrop = 0u;
+    uint8_t  hwm = 0u;
+    uint32_t ovw;
+    uint8_t  r[13];
+
+    sdk_usb_ep3_stats(&pushed, &qdrop, &hwm);
+    ovw       = sdk_rf24_rx_overwrite();
+    r[0]  = (uint8_t)(pushed & 0xFFu);
+    r[1]  = (uint8_t)((pushed >> 8) & 0xFFu);
+    r[2]  = (uint8_t)((pushed >> 16) & 0xFFu);
+    r[3]  = (uint8_t)((pushed >> 24) & 0xFFu);
+    r[4]  = (uint8_t)(qdrop & 0xFFu);
+    r[5]  = (uint8_t)((qdrop >> 8) & 0xFFu);
+    r[6]  = (uint8_t)((qdrop >> 16) & 0xFFu);
+    r[7]  = (uint8_t)((qdrop >> 24) & 0xFFu);
+    r[8]  = hwm;
+    r[9]  = (uint8_t)(ovw & 0xFFu);
+    r[10] = (uint8_t)((ovw >> 8) & 0xFFu);
+    r[11] = (uint8_t)((ovw >> 16) & 0xFFu);
+    r[12] = (uint8_t)((ovw >> 24) & 0xFFu);
+    usb_ota_reply(0u, r, (uint8_t)sizeof(r));
+}
+
 /* 待落盘的 OTA 作业：ISR 登记 → 主循环 usb_ota_poll() 执行。
  * 上位机严格「发一帧等一应答」，故任一时刻至多一个作业在飞。 */
 typedef enum { OTA_JOB_NONE = 0u, OTA_JOB_DATA, OTA_JOB_END, OTA_JOB_ABORT } ota_job_t;
@@ -737,6 +824,10 @@ static bool usb_ota_handle_sub(uint8_t sub, uint8_t l)
 
     case BRIDGE_OTA_SUB_GET_INFO:
         usb_ota_get_info();
+        return true;
+
+    case BRIDGE_OTA_SUB_GET_DIAG2:
+        usb_ota_get_diag2();
         return true;
 
     case BRIDGE_OTA_SUB_FW_BEGIN: {
@@ -1045,6 +1136,7 @@ void sdk_usb_poll(void)
 {
     usb_wake_report_flush();
     usb_ota_poll();
+    usb_ep3_drain();        /* 兜底排空：IN 完成中断遗漏时补提交 */
 
     /* 主机挂起/恢复边沿 → 经 2.4G 下发键盘（见 BRIDGE_RADIO_PKT_HOST），
      * 键盘侧据此更新主机电源状态并上报 SK32。 */
@@ -1064,17 +1156,21 @@ int sdk_usb_tunnel_send(const uint8_t *d, uint8_t len)
     if (s_dev_config == 0u) {
         return BRIDGE_ERR_STATE;
     }
-    if (len > 32u) {
+    if (len > USB_EP3_SLOT) {
         return BRIDGE_ERR_PARAM;    /* 超出单包容量：VIA 不使用 >32B */
     }
-    if ((R8_UEP3_CTRL & MASK_UEP_T_RES) == UEP_T_RES_ACK) {
-        return BRIDGE_ERR_IO;       /* 上一包尚未被主机取走 */
-    }
-
-    memset(pEP3_IN_DataBuf, 0, 32u);
-    memcpy(pEP3_IN_DataBuf, d, len);
-    DevEP3_IN_Deal(32u);
+    /* 一律入队 + 尝试提交：不再因 EP3 忙而丢（旧实现的静默丢点）。 */
+    usb_ep3_push(d, len);
+    usb_ep3_drain();
     return BRIDGE_OK;
+}
+
+/* EP3 上行队列取证计数（32 位，供 OTA GET_DIAG2 读取）。 */
+void sdk_usb_ep3_stats(uint32_t *pushed, uint32_t *q_drop, uint8_t *hwm)
+{
+    if (pushed != 0) { *pushed = s_ep3_pushed; }
+    if (q_drop != 0) { *q_drop = s_ep3_q_drop; }
+    if (hwm != 0)    { *hwm    = s_ep3_q_hwm; }
 }
 
 /* ============================ 运行时改 USB 标识（CMD_SET_NAME / CMD_SET_USB_ID） ============================ */

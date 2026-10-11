@@ -29,6 +29,7 @@
 #include "bridge_config.h"
 #include "bridge_types.h"
 #include "bridge_rf24pair.h"
+#include "bridge_uart.h"       /* 诊断快照追加 UART 接收腿计数 */
 
 /* ------------------------------ 参数 ------------------------------ */
 /* rfConfig：与 RF_PHY 例程同源，字段含义见 CH58xBLE_LIB.h 的 rfConfig_t */
@@ -68,11 +69,24 @@
 #define RF24_TX_QUEUE_DEPTH   4u            /* 队列深度（覆盖 RF_Tx 往返时延） */
 /* 单帧「未收到对端 ACK」后的最大软件重发次数。
  *   LLE_MODE_AUTO 只做「发一次 + 等一次 ACK」（约 200us 超时），且 rfConfig_t
- *   无重传计数字段 → 硬件不会自动多次重发。原实现在 TX_MODE_RX_TIMEOUT /
- *   TX_MODE_TX_FAIL 时直接出队丢帧（上行 0.5%~2% 丢包本底）。现改为：终态未
- *   收到 ACK 时把队首帧原地重发，最多 RF24_TX_MAX_RETRY 次；仍失败才丢帧。
- *   双端（键盘模组 / 接收器）共用本文件，故两端同时生效。 */
-#define RF24_TX_MAX_RETRY     5u
+ *   无重传计数字段 → 硬件不会自动多次重发。故本层在 TX_MODE_RX_TIMEOUT /
+ *   TX_MODE_TX_FAIL 终态未收到 ACK 时把队首帧原地重发，最多 RF24_TX_MAX_RETRY
+ *   次；仍失败才丢帧（计 tx_drop）。
+ *
+ * ★取值 15（=首发 + 15 重发）的依据（1M PHY 真机 diag，键盘侧 COM10）：
+ *   1M PHY 下 auto-ACK 工作正常——3000 帧 soak 增量 sub_ok=3060、done_fail=59
+ *   → 首发包约 98% 一次 ACK 成功，约 2% 需 1 次软件重发，且全部最终送达
+ *   （tx_drop=0）。即单次尝试失败率 q ≈ 0.02；覆盖 16 次残留 ≈ q^16 ≈ 1e-27，
+ *   10 万帧期望 RF 层丢包 < 1e-5。比 HEAD 的 6 次（q^6 ≈ 6e-11）留足余量，
+ *   呼应「无法彻底解决 → 提高重传次数」的兜底。
+ *   重发只发生在 ACK 超时后，不增加正常路径时延（3000 帧实测往返均值 9.0ms）。
+ *   双端（键盘模组 / 接收器）共用本文件，两端同时生效。
+ *
+ * ⚠️ 曾误判：在已回退的 2M PHY 配置下，diag 呈现 sub_ok == done_fail（发送方
+ *    几乎从不收到 auto-ACK），当时据此推断「硬件单一 ACK 引擎 ∷ 两端对称自发
+ *    TX 的结构性冲突」并主张靠盲重发投递。改回 1M 后该现象消失 → 该结论是
+ *    2M 配置的假象，非本链路固有属性，勿再据此调参。 */
+#define RF24_TX_MAX_RETRY     15u
 #define RF24_TX_SLOT          69u           /* = [len] + type + link_id(2) + seq + payload(64) */
 #define RF24_REPORT_PERIOD_MS 1u            /* 默认 1ms（D5）；SET_CONFIG REPORT_PERIOD 可覆盖 */
 
@@ -83,12 +97,22 @@
 #define RF24_EVT_HB     0x0008u   /* 1s 心跳 / 断链判定 */
 #define RF24_EVT_PAIR   0x0010u   /* 配对窗口：键盘侧周期重发 PAIR_REQ */
 #define RF24_EVT_TXDONE 0x0020u   /* TX_FINISH/TX_FAIL：推进发送队列 / 回接收态 */
+#define RF24_EVT_WD     0x0040u   /* 兜底看门狗（周期自续）：复位卡死的射频标志 */
 
 #define RF24_LINK_LOST_CNT  3u    /* 连续 3 次心跳无收 → 断链（规格 6.2） */
 #define RF24_HB_PERIOD_MS   1000u
 /* 实验开关：0 = 关闭 1s 心跳（不发 HEARTBEAT、不做断链判定、不再重排/自续期）。
  * 用途：验证「~1s 全黑突发」是否由心跳引发。1 = 保持原行为。 */
 #define RF24_HB_ENABLE      0
+
+/* 兜底看门狗（正常路径零开销，仅防御「ISR 终态回调丢失 → 事件泵永久停摆」）：
+ * 正常一次在飞事务（RF_Tx 等 ACK ~200us + 传输 + 自动回 ACK）总存活 < 数 ms；
+ * 若 s_tx_busy / s_rx_acking 连续 > RF24_WD_STUCK 个 RF24_WD_PERIOD_MS 周期仍为真，
+ * 即判定终态回调被抢收/丢失致事件泵停摆，强制复位射频标志与引擎并重排。
+ * 复位时队首帧原地保留（不改 s_tx_q_head/s_tx_q_cnt）→ 重发同一 seq，收端去重
+ * → 既不丢帧也不产生重复上报。 */
+#define RF24_WD_PERIOD_MS   20u
+#define RF24_WD_STUCK       25u   /* 25 × 20ms = 500ms：远超正常在飞时长 */
 
 /* ------------------------------ 状态 ------------------------------ */
 static uint8_t  s_task;
@@ -118,6 +142,7 @@ static uint8_t  s_rx_last_seq;              /* 最近一次已交付的入站帧
 static bool     s_rx_last_valid;            /* s_rx_last_seq 是否有效（初始化/重连时清零） */
 
 static uint8_t  s_hb_miss;
+static uint8_t  s_wd_stuck;                 /* 看门狗：s_tx_busy/s_rx_acking 连续为真的周期数 */
 
 /* ------------------------------ 建链取证计数 ------------------------------
  * 2.4G 配对/建链失败时，串口日志不可用（键盘侧 COM10 只跑桥协议、Dongle 无日志
@@ -131,6 +156,7 @@ static uint16_t s_diag_tx_done_fail;   /* TX_FAIL（重传耗尽） */
 static uint16_t s_diag_rx_any;         /* 射频层收到任何一包（rsr==0） */
 static uint16_t s_diag_rx_pair;        /* 收到的配对帧数 */
 static uint16_t s_diag_rx_data_bad;    /* 数据帧被丢弃：未绑定 / link_id 不符 */
+static uint32_t s_diag_rx_overwrite;   /* 上一帧尚未交付即被新帧覆写 s_rx_mail（静默丢点，32 位不饱和） */
 
 static void diag_inc(uint16_t *c)
 {
@@ -193,9 +219,21 @@ static void rf24_pump_tx(void)
         return;
     }
 
+    /* ★根因修复（真机定位的「~4.1 万帧键盘侧永久死锁」）：
+     * 必须在调用 RF_Shut()/RF_Tx() **之前**置 s_tx_busy，使「标志」严格领先于
+     * 「射频在飞事务」。旧写法是 RF_Tx() 返回成功后才 s_tx_busy=true，存在窄竞态：
+     * 若 LLE 中断恰在「RF_Tx 返回后、s_tx_busy 置位前」投递 RX_MODE_RX_DATA
+     * （对端自发包抢收了本端在飞 TX 的终态回调），ISR 内补偿判据 `if (s_tx_busy)`
+     * 看到 false → 不补发 TXDONE；随后该在飞 TX 的终态永久丢失 → s_tx_busy 永久为真
+     * → rf24_pump_tx / RF24_EVT_RX / RF24_EVT_TXDONE 三处守卫全被挡住 → 射频事件泵
+     * 永久停摆（实测 GET_DIAG 计数整段冻结、up 仍=1、仅 MCU 复位可恢复）。
+     * 提前置位后 ISR 必然看到 true → 补偿路径（补发 TXDONE）生效，状态机自愈。
+     * 提交失败时撤销占位（射频无在飞事务），保持队列一致。 */
+    s_tx_busy = true;
     (void)RF_Shut();
     /* LLE_MODE_AUTO：发完自动等待对端 ACK 并回到接收态（由回调驱动） */
     if (RF_Tx(&s_tx_q[s_tx_q_head][1], len, 0xFFu, 0xFFu) != SUCCESS) {
+        s_tx_busy = false;      /* 撤销占位 */
         s_tx_q_head = (uint8_t)((s_tx_q_head + 1u) % RF24_TX_QUEUE_DEPTH);
         s_tx_q_cnt--;
         s_tx_drop++;
@@ -205,8 +243,41 @@ static void rf24_pump_tx(void)
         rf24_arm_rx();
         return;
     }
-    s_tx_busy = true;
     diag_inc(&s_diag_tx_submit_ok);
+}
+
+/* 兜底看门狗（周期任务上下文）。正常路径下 s_tx_busy / s_rx_acking 的连续存活期
+ * 仅数百 µs ~ 数 ms，绝不会达到 RF24_WD_STUCK 个周期。若达到，说明在飞事务的 ISR
+ * 终态回调已被抢收/丢失、事件泵停摆（无论根因竞态是否仍有残余），此时强制清标志 +
+ * RF_Shut 复位射频引擎，并立即重排：队首帧原地重发（seq 不变 → 对端去重，不丢不重）。 */
+static void rf24_watchdog(void)
+{
+    if (!s_up) {
+        s_wd_stuck = 0u;
+        return;
+    }
+    if (s_tx_busy || s_rx_acking) {
+        if (s_wd_stuck < 0xFFu) {
+            s_wd_stuck++;
+        }
+        if (s_wd_stuck >= RF24_WD_STUCK) {
+            s_wd_stuck  = 0u;
+            s_tx_busy   = false;
+            s_rx_acking = false;
+            s_tx_retry  = 0u;       /* 让队首帧重新走完整重发预算 */
+            (void)RF_Shut();
+            /* 复用 done_fail 计数：被看门狗抢救的在飞事务同样属于「非正常终态」，
+             * 便于在既有 diag 通道观测（不新增 24B 布局字段）。 */
+            diag_inc(&s_diag_tx_done_fail);
+            if (s_tx_q_cnt > 0u) {
+                rf24_pump_tx();
+            } else {
+                rf24_arm_rx();
+            }
+        }
+    } else {
+        s_wd_stuck = 0u;
+    }
 }
 
 /* 入站帧去重：rf24_post 每入队一帧才 +1 序号，而重发（RF24_TX_MAX_RETRY）沿用同一
@@ -424,6 +495,9 @@ static void rf24_status_cb(uint8_t sta, uint8_t rsr, uint8_t *rxBuf)
             if (n > (uint8_t)sizeof(s_rx_mail)) {
                 n = (uint8_t)sizeof(s_rx_mail);
             }
+            if (s_rx_pending) {
+                s_diag_rx_overwrite++;  /* 上帧未交付即被覆写 → 静默丢帧（取证） */
+            }
             for (uint8_t i = 0u; i < n; i++) {
                 s_rx_mail[i] = rxBuf[i + 2u];   /* rxBuf[0]=rssi, [1]=len, [2..]=data */
             }
@@ -548,6 +622,11 @@ static uint16_t rf24_process_event(uint8_t task_id, uint16_t events)
 #endif
         return (uint16_t)(events ^ RF24_EVT_HB);
     }
+    if (events & RF24_EVT_WD) {
+        rf24_watchdog();
+        tmos_start_task(s_task, RF24_EVT_WD, (uint16_t)RF24_WD_PERIOD_MS);
+        return (uint16_t)(events ^ RF24_EVT_WD);
+    }
     if (events & RF24_EVT_PAIR) {
         /* 配对窗口：键盘侧周期重发 PAIR_REQ，直至绑定成功 */
         if (s_up && !bridge_rf24pair_is_bound()) {
@@ -610,8 +689,12 @@ int sdk_rf24_init(void)
     cfg.Channel       = RF24_CHANNEL;
     cfg.Frequency     = RF24_FREQUENCY;
     cfg.ChannelMap    = RF24_CHANNEL_MAP;
-    /* 显式锁定 1M PHY（LLE_MODE_PHY_1M 值=0，与厂商 RF_PHY / PER 例程默认一致）。
-     * 2M PHY 速率翻倍但接收灵敏度低、更易丢包，本项目不采用。 */
+    /* 1M PHY（LLE_MODE_PHY_1M，bit4=0）。
+     * ★根因（单变量实测确认）：2M PHY 下 soak 2000 出现 ~1.3% 丢包，并稳定在
+     *   ~1300 帧处永久僵死；单变量改回 1M 后 soak 3000 仅 1 丢（且为 USB 侧，
+     *   RF tx_drop=0）、僵死消失、auto-ACK 恢复正常。→ 2M 灵敏度下降/易受干扰
+     *   是本轮回归根因，故锁定 1M，不再采用 2M。
+     * 双端（键盘模组 / 接收器）共用本文件，两端 PHY 必须一致才能互通。 */
     cfg.LLEMode       = LLE_MODE_AUTO | RF24_NONHOP_MODE | LLE_MODE_PHY_1M;
     cfg.rfStatusCB    = rf24_status_cb;
     cfg.HopPeriod     = RF24_HOP_PERIOD;
@@ -635,6 +718,9 @@ int sdk_rf24_init(void)
 #if RF24_HB_ENABLE
     tmos_start_task(s_task, RF24_EVT_HB, (uint16_t)RF24_HB_PERIOD_MS);
 #endif
+    /* 启动兜底看门狗（周期自续），防 ISR 终态回调丢失致事件泵永久停摆 */
+    s_wd_stuck = 0u;
+    tmos_start_task(s_task, RF24_EVT_WD, (uint16_t)RF24_WD_PERIOD_MS);
     return BRIDGE_OK;
 }
 
@@ -649,6 +735,10 @@ int sdk_rf24_deinit(void)
      * （真机表现为退出配对窗口后仍在配对）。 */
     (void)tmos_stop_task(s_task, RF24_EVT_PAIR);
     (void)tmos_clear_event(s_task, RF24_EVT_PAIR);
+    /* 同步停看门狗：deinit 后 s_up=false，其内部会自清，但停掉周期任务更干净，
+     * 避免退出 2.4G 后仍有 20ms 周期任务空转。 */
+    (void)tmos_stop_task(s_task, RF24_EVT_WD);
+    (void)tmos_clear_event(s_task, RF24_EVT_WD);
     (void)RF_Shut();
     s_up         = false;
     s_conn       = false;
@@ -757,8 +847,9 @@ uint8_t sdk_rf24_protocol_ver(void)
     return 0x02u;      /* 厂商 2.4G 链路版本（core 的 EVT_STATE 用） */
 }
 
-/* 建链取证快照（24B，布局见 bridge_ch58x_sdk.h）：
- * 单字节状态在前，其后 8 个 LE16 计数；无副作用，可在任务上下文随时调用。 */
+/* 建链取证快照（24B 基础布局 + 16B UART 接收腿取证，共 40B；布局见
+ * bridge_ch58x_sdk.h）：单字节状态在前，其后 8 个 LE16 计数；无副作用，
+ * 可在任务上下文随时调用。 */
 int sdk_rf24_diag(uint8_t *out, uint8_t *out_len)
 {
     uint16_t c[8];
@@ -790,8 +881,42 @@ int sdk_rf24_diag(uint8_t *out, uint8_t *out_len)
         out[8u + i * 2u] = (uint8_t)(c[i] & 0xFFu);
         out[9u + i * 2u] = (uint8_t)(c[i] >> 8);
     }
-    *out_len = 24u;
+
+    /* [24..] UART 接收腿取证（键盘侧数据面；Dongle 侧 UART 未启用，恒 0）：
+     *   [24..25] RX FIFO 溢出(overrun)   [26..27] RX 帧错    [28..29] RX 校验错
+     *   [30..31] 半帧超时丢             [32..33] ring 满丢  [34..35] 长度越界丢
+     *   [36..37] CRC 错                 [38..41] 合法帧数（LE32，不回绕）
+     * 用途：soak 上行丢包逐帧归因——若「溢出/帧错/半帧超时」增量 == 上行丢帧数，
+     *       根因在键盘 UART RX 采样（RF 负载下 FIFO 溢出/中断迟延）。 */
+    uint16_t u_over = bridge_uart_rx_overrun_count();
+    uint16_t u_frm  = bridge_uart_rx_frame_err_count();
+    uint16_t u_par  = bridge_uart_rx_parity_err_count();
+    uint16_t u_half = bridge_uart_drop_half_frame();
+    uint16_t u_ring = bridge_uart_drop_ring_full();
+    uint16_t u_len  = bridge_uart_drop_len_over();
+    uint16_t u_crc  = bridge_uart_crc_error_count();
+    uint32_t u_ok   = bridge_uart_rx_ok_count();
+
+    out[24] = (uint8_t)(u_over & 0xFFu); out[25] = (uint8_t)(u_over >> 8);
+    out[26] = (uint8_t)(u_frm  & 0xFFu); out[27] = (uint8_t)(u_frm  >> 8);
+    out[28] = (uint8_t)(u_par  & 0xFFu); out[29] = (uint8_t)(u_par  >> 8);
+    out[30] = (uint8_t)(u_half & 0xFFu); out[31] = (uint8_t)(u_half >> 8);
+    out[32] = (uint8_t)(u_ring & 0xFFu); out[33] = (uint8_t)(u_ring >> 8);
+    out[34] = (uint8_t)(u_len  & 0xFFu); out[35] = (uint8_t)(u_len  >> 8);
+    out[36] = (uint8_t)(u_crc  & 0xFFu); out[37] = (uint8_t)(u_crc  >> 8);
+    out[38] = (uint8_t)(u_ok & 0xFFu);
+    out[39] = (uint8_t)((u_ok >> 8) & 0xFFu);
+    out[40] = (uint8_t)((u_ok >> 16) & 0xFFu);
+    out[41] = (uint8_t)((u_ok >> 24) & 0xFFu);
+
+    *out_len = 42u;
     return BRIDGE_OK;
+}
+
+/* 接收邮箱覆写（静默丢帧）累计次数：>0 即证明存在「上一帧未交付即被新帧覆盖」的丢点。 */
+uint32_t sdk_rf24_rx_overwrite(void)
+{
+    return s_diag_rx_overwrite;
 }
 
 /* ===========================================================================

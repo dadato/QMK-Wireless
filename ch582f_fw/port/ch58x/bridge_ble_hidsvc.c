@@ -421,6 +421,14 @@ static void bridge_hid_evt_cb(uint8_t evt)
 static uint8_t  s_hid_task    = 0xFFu;
 static uint16_t s_conn_handle = INVALID_CONNHANDLE;
 
+/* 断链取证（排障用，经 CMD_HID_DIAG 0x2B 取回）：
+ * 记录最近一次 GAP_LINK_TERMINATED 的原因码 / 本地角色，以及建立/断链累计次数。
+ * 用于区分「连上即断（reason=0x3D/0x05/0x06，绑定/加密失败）」与「监督超时(0x08)」。 */
+static uint8_t  s_last_term_reason = 0u;
+static uint8_t  s_last_term_role   = 0u;
+static uint16_t s_estab_count      = 0u;
+static uint16_t s_term_count       = 0u;
+
 static uint16_t bridge_hid_process_event(uint8_t task_id, uint16_t events)
 {
     bridge_dbg_mark(0x60);      /* HID 任务事件上下文进入 */
@@ -464,6 +472,7 @@ static void bridge_hid_state_cb(gapRole_States_t newState, gapRoleEvent_t *pEven
         if (pEvent->gap.opcode == GAP_LINK_ESTABLISHED_EVENT) {
             gapEstLinkReqEvent_t *ev = (gapEstLinkReqEvent_t *)pEvent;
 
+            s_estab_count++;
             bridge_dbg_mark(0x40);      /* GAP 连接建立事件进入本回调 */
             bridge_dbg_mark(0x41);      /* 即将进入 sdk_ble_on_connect()（内含 NV 写） */
             sdk_ble_on_connect(ev->connectionHandle);
@@ -480,6 +489,11 @@ static void bridge_hid_state_cb(gapRole_States_t newState, gapRoleEvent_t *pEven
     } else if (newState == GAPROLE_WAITING) {
         bridge_dbg_mark(0x44);          /* GAP WAITING（断链/可广播）分支 */
         if (pEvent->gap.opcode == GAP_LINK_TERMINATED_EVENT) {
+            gapTerminateLinkEvent_t *tev = (gapTerminateLinkEvent_t *)pEvent;
+
+            s_last_term_reason = tev->reason;
+            s_last_term_role   = tev->connRole;
+            s_term_count++;
             s_conn_handle = INVALID_CONNHANDLE;
             sdk_ble_on_disconnect(0u);
         }
@@ -619,7 +633,17 @@ bStatus_t Hid_AddService(void)
  *   out[10]   = 属性表项数（GATT_NUM_ATTRS(hidAttrTbl)，应为 41）
  *   out[11]   = 上次复位源（R8_RESET_STATUS & 0x07，见 sdk_last_reset_cause）
  *   out[12]   = 复位前最后阶段面包屑（bridge_dbg_stage_prev，见 bridge_port_ch58x.c）
- *   out[13]   = 当前阶段面包屑（bridge_dbg_stage_now） */
+ *   out[13]   = 当前阶段面包屑（bridge_dbg_stage_now）
+ *   out[14..17] = BLE 出站 notify（HidDev_Report）失败次数（32 位 LE）
+ *   out[18..21] = 失败帧延迟重发成功次数（32 位 LE）
+ *   out[22..25] = 失败帧延迟重发仍失败次数（32 位 LE）
+ *   out[26]   = 最近一次 GAP_LINK_TERMINATED 的原因码（LL reason，0=无记录）
+ *   out[27]   = 该次终止事件的本地角色（gapTerminateLinkEvent_t.connRole: 0=central/1=peripheral）
+ *   out[28..29] = GAP_LINK_ESTABLISHED 累计次数（16 位 LE）
+ *   out[30..31] = GAP_LINK_TERMINATED 累计次数（16 位 LE）
+ * 前 14 字节（out[0..13]）见 bridge_port.h；后 12 字节为出站丢帧取证，
+ * 用于区分「模组侧 notify 失败」与「主机侧丢弃」（见 bridge_ch58x_sdk.c）。
+ * out[26..31] 为断链取证：建立/终止计数快速增长 = 链路抖动；reason 定位其成因。 */
 int port_hid_diag(uint8_t *out, uint8_t *out_len)
 {
     if (out == 0 || out_len == 0) {
@@ -640,8 +664,25 @@ int port_hid_diag(uint8_t *out, uint8_t *out_len)
     out[11] = sdk_last_reset_cause();
     out[12] = bridge_dbg_stage_prev();
     out[13] = bridge_dbg_stage_now();
+    {
+        uint32_t f  = sdk_ble_notify_fail_count();
+        uint32_t ro = sdk_ble_notify_retry_ok_count();
+        uint32_t rd = sdk_ble_notify_retry_drop_count();
+        out[14] = (uint8_t)(f);         out[15] = (uint8_t)(f >> 8);
+        out[16] = (uint8_t)(f >> 16);   out[17] = (uint8_t)(f >> 24);
+        out[18] = (uint8_t)(ro);        out[19] = (uint8_t)(ro >> 8);
+        out[20] = (uint8_t)(ro >> 16);  out[21] = (uint8_t)(ro >> 24);
+        out[22] = (uint8_t)(rd);        out[23] = (uint8_t)(rd >> 8);
+        out[24] = (uint8_t)(rd >> 16);  out[25] = (uint8_t)(rd >> 24);
+    }
+    out[26] = s_last_term_reason;
+    out[27] = s_last_term_role;
+    out[28] = (uint8_t)(s_estab_count & 0xFFu);
+    out[29] = (uint8_t)(s_estab_count >> 8);
+    out[30] = (uint8_t)(s_term_count & 0xFFu);
+    out[31] = (uint8_t)(s_term_count >> 8);
 
-    *out_len = 14u;
+    *out_len = 32u;
     return BRIDGE_OK;
 }
 

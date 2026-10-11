@@ -145,7 +145,7 @@ CH582M 在本方案中作为**无线协处理器（Wireless Co-Processor）**，
 
 - **ISP 下载配置引脚 = PB22（pin 17）**，必须 **10k 上拉**，上电不得被拉低；**不得**用该脚承载 UART 或任何上电可能为低的信号。
 - **USB 引脚**：PB10（pin 13，UD-）/ PB11（pin 12，UD+）。键盘侧桥不做 USB，留作备用；**Dongle 侧必须使用**（D7）。
-- **PA10/PA11** 为 32.768kHz 低速晶振脚（X32KI/X32KO，LSE，**已实装**）：固件以 `CLK_OSC32K=0` 选外部 LSE（D15），作为 RTC / TMOS 时基 / WCH 硬件跳频同步基准；**严禁**再配置为 GPIO。
+- **PA10/PA11** 为 32.768kHz 低速晶振脚（X32KI/X32KO，LSE，**已实装**）：固件以 `CLK_OSC32K=0` 选外部 LSE（D15），作为 RTC / TMOS 时基（同步跳频若将来实现，可再以其为基准；当前跳频未启用，见 §8.3）；**严禁**再配置为 GPIO。
 - QFN28（CH582F）可用 20 个 GPIO，本方案已占用 12 个，余 3~5 个备用（见 pinmap 第 3.4 节）。`LINK` 可软件化、`MODE_SEL` 可降到 1 根以进一步释放。
 - 完整管脚表见 [ch582f_pinmap.md](./ch582f_pinmap.md) 第 3 章（键盘侧）与第 4 章（Dongle 侧）。
 
@@ -185,7 +185,7 @@ VBUS 插入  >  SK32 显式 SET_MODE  >  上次记忆模式
 | `MODE_USB` | VBUS 移除 | 记忆模式 | 初始化对应射频栈 |
 | `MODE_BLE` | `SET_MODE(2.4G)` | `MODE_2G4` | 断开 BLE、启动 2.4G |
 | `MODE_BLE` | `PAIR_START` | `MODE_BLE_PAIR` | 进入可发现广播 |
-| `MODE_2G4` | 链路丢失 > 3s | `MODE_2G4_PAIR` | 重新配对窗口 |
+| `MODE_2G4` | 链路丢失 > 3s | `MODE_2G4`（保持） | 保持常规模式、射频静默；**不**重开广播 / 不重入配对窗口（对端恢复经心跳 / link_id 自动重连） |
 | `MODE_BLE_PAIR` / `MODE_2G4_PAIR` | 配对超时 > 60s 未配对成功 | `MODE_BLE` / `MODE_2G4` | 停配对窗口（BLE 关广播 / 2.4G 停 `PAIR_REQ` 重发）、回 `EVT_PAIR_RESULT(1)`、解除深睡门闩 |
 | 任意 | 无活动 > T_idle | `MODE_SLEEP` | 关射频、进 Sleep |
 | `MODE_SLEEP` | 按键 / UART / 射频事件 | 原模式 | 快速恢复 |
@@ -226,7 +226,7 @@ VBUS 插入  >  SK32 显式 SET_MODE  >  上次记忆模式
 | `0x02` | `GET_STATUS` | — | 查询模式/连接/电量 |
 | `0x03` | `SET_MODE` | mode(1B), persist(1B) | 切换模式；**不接受配对模式**（`MODE_BLE_PAIR`/`MODE_2G4_PAIR`，回 `PARAM` 错误），配对一律走 `PAIR_START` |
 | `0x04` | `SET_PROFILE` | profile(1B, 1~4) | 切换 BLE 主机 |
-| `0x05` | `PAIR_START` | — | 进入配对窗口 |
+| `0x05` | `PAIR_START` | duration_s(2B LE，可选) | 进入配对窗口；`duration_s`=窗口持续时间（秒），缺省=60s，**0=不自动关闭**；payload 长度非 0/2 → `PARAM` |
 | `0x06` | `UNPAIR` | profile(1B, 0xFF=全部) | 删除配对信息 |
 | `0x07` | `RESET` | — | 桥软复位 |
 | `0x08` | `ENTER_BOOTLOADER`（实现名 `CMD_ENTER_BOOT`） | — | 进常驻 BOOT（OTA 收包模式），非 ROM ISP；见 10.1 |
@@ -248,13 +248,14 @@ VBUS 插入  >  SK32 显式 SET_MODE  >  上次记忆模式
 | `0x1B` | `NV_READ` | addr(1B) | 读用户 NV 单元，应答 addr(1B)+data(32B) |
 | `0x1C` | `SET_BATTERY` | percent(1B, 0~100) | SK32 上报电量，优先于本地 ADC；随后回 `EVT_STATE` |
 | `0x1D` | `SLEEP` | level(1B) | 睡眠分级：0=唤醒 / 1=浅睡 / 2=深睡（配 `SET_CONFIG` key `SLEEP_POLICY`） |
+| `0x25` | `SLEEP_CFG` | idle_s(2B LE), deep_s(2B LE) | 配置 AUTO 策略自动休眠时间门限（单位 s，落盘）：idle_s=距最近串口接收活动达该秒数后允许浅睡（0=禁用自动浅睡）/ deep_s=未连接且空闲达该秒数后进深睡（0=禁用自动深睡）；仅 `SLEEP_POLICY=AUTO` 生效；payload 长度非 4 → `PARAM` |
 | `0x1E` | `GET_ADC` | — | 读本地 ADC 电压，应答 mv(2B 小端) |
 | `0x1F` | `SET_NAME` | target(1B), name... | 运行时改标识：target 0=BLE 广播名 / 1=USB(Dongle) 名（另一侧经 2.4G 中继） |
 | `0x20` | `SET_USB_ID` | vid(2B LE), pid(2B LE) | 运行时改 USB VID/PID（Dongle 侧重枚举） |
 | `0x21`~`0x24` | `FW_BEGIN` / `FW_DATA` / `FW_END` / `FW_ABORT` | 见 §10 | 键盘侧 UART OTA 帧；升级流程由 `board/ota_web` 承担 |
 | `0x7F` | `PING` | — | 心跳 |
 
-> `0x18`~`0x24` 为借鉴市售模组指令集新增的扩展命令，完整 payload 与应答格式见
+> `0x18`~`0x25` 为借鉴市售模组指令集新增的扩展命令，完整 payload 与应答格式见
 > [debug_web/SPEC.md](./ch582f_fw/board/debug_web/SPEC.md) §4.6 / §4.7；`0x0F`、`0x16`、`0x17` 保留未用。
 
 **下行（桥 → SK32）**
@@ -264,7 +265,7 @@ VBUS 插入  >  SK32 显式 SET_MODE  >  上次记忆模式
 | `0x80` | `EVT_STATE` | mode, link, profile, battery | 状态变化主动上报 |
 | `0x81` | `EVT_LEDS` | led_state(1B) | Caps/Num/Scroll，映射 `keyboard_leds()` |
 | `0x82` | `EVT_BATTERY` | mv(2B), percent(1B) | 周期上报 |
-| `0x83` | `EVT_PAIR_RESULT` | result(1B), profile(1B) | 配对结果；`result=0` 成功、`=1` 失败/超时（配对窗口超过 `BRIDGE_PAIR_TIMEOUT_S` 未成功时发一次瞬时事件） |
+| `0x83` | `EVT_PAIR_RESULT` | result(1B), profile(1B) | 配对结果；`result=0` 成功、`=1` 失败/超时（配对窗口超过 `duration_s`（`PAIR_START` 设置，缺省 `BRIDGE_PAIR_TIMEOUT_S`=60s）未成功时发一次瞬时事件；`duration_s=0` 不超时） |
 | `0x84` | `EVT_ERROR` | code(1B) | 错误码 |
 | `0x85` | `EVT_TUNNEL_USB` | ≤64B | USB/Dongle 透传上报（VIA Raw HID 通道），无应答 |
 | `0x86` | `EVT_TUNNEL_BLE` | ≤32B | BLE 透传上报（手机 APP 通道），无应答 |
@@ -330,11 +331,11 @@ VBUS 插入  >  SK32 显式 SET_MODE  >  上次记忆模式
 
 | 操作 | 触发 | 表现 |
 |---|---|---|
-| 配对 | `PAIR_START` | 进入可发现广播，限时 60s |
+| 配对 | `PAIR_START([duration_s])` | 进入可发现广播，限时 `duration_s` 秒（缺省 60s，0=不自动关闭） |
 | 解除单槽 | `UNPAIR(profile)` | 删除该槽绑定信息 |
 | 解除全部 | `UNPAIR(0xFF)` | 清空并回 `MODE_BLE_PAIR` |
 | 配对成功/失败 | — | 回 `EVT_PAIR_RESULT(result, profile)` |
-| 配对超时 | 配对窗口开启 > `BRIDGE_PAIR_TIMEOUT_S`（60s）未配对成功 | 停止配对动作（BLE 关广播 / 2.4G 停 `PAIR_REQ` 周期重发），回落对应非配对无线模式（`MODE_BLE` / `MODE_2G4`），并回一次**瞬时** `EVT_PAIR_RESULT(1, profile)` |
+| 配对超时 | 配对窗口开启 > `duration_s`（`PAIR_START` 设置，缺省 60s；0=不超时）未配对成功 | 停止配对动作（BLE 关广播 / 2.4G 停 `PAIR_REQ` 周期重发），回落对应非配对无线模式（`MODE_BLE` / `MODE_2G4`），并回一次**瞬时** `EVT_PAIR_RESULT(1, profile)` |
 
 ### 7.5 连接参数
 
@@ -343,7 +344,7 @@ VBUS 插入  >  SK32 显式 SET_MODE  >  上次记忆模式
 | Connection Interval | 最小允许值（7.5ms） |
 | Slave Latency | 0（追求低延迟） |
 | Supervision Timeout | ≥ 2s |
-| 重连策略 | 断连后自动重连，指数退避，上限 3s 间隔 |
+| 重连策略 | 常规模式**不**主动广播：BLE 已配对后掉线保持射频静默，需 `PAIR_START` 重开配对窗口；2.4G 由心跳 / link_id 在对端恢复时自动重连 |
 
 ### 7.6 LED 状态回传
 
@@ -377,8 +378,16 @@ VBUS 插入  >  SK32 显式 SET_MODE  >  上次记忆模式
 |---|---|
 | 射频上报率 | **1000 Hz（1ms）**（D5）；可选降档以省电 |
 | 串口送帧 | **事件驱动**，两帧间隔 ≥5ms（D14，见 6.3） |
-| 端到端延迟 | **≤ 8 ms**（D14 目标；原始 38400 下单帧占线即 4.17ms，提升到 921600 后串口仅 ≈0.26ms，余量充足） |
+| 端到端延迟 | **往返 ≤ 10 ms，上行（模组→接收器）≤ 4 ms**（D14 目标；实测见下方注） |
 | 丢包重传 | 私有协议自带，窗口内重传 |
+
+> **实测（`tools/_diagcheck.py soak 10000`，严格一发一收，2.4G 已切 2M PHY）**：往返时延均值 **8.6ms**
+> （中位 8.7 / P95 9.4 / 最大 14.2），上行单程时延均值 **3.6ms**（中位 3.6 / P95 4.1 / 最大 6.5）；
+> 丢包 1/10000 = **0.01%**，应答错序/重复 **0**（`rx_data_bad=0`）。
+> 其中「上行时延」口径为「上位机把回显帧写入键盘模组 UART（COM10）→ 上位机经 Dongle 读到同序号 IN」的单程耗时。
+> **该口径下 ~3.4ms 属台架 USB 适配器固有开销**：COM10 为 WCH-Link 串口适配器（单程 ≈2.4ms，
+> 实测 `write()` 本身仅 0.17ms，写后到模组应答往返 4.8ms）＋ Dongle EP3 IN（bInterval=1ms，≈1.0ms）；
+> 桥固件 + 2.4G 空口合计仅约 **0.2ms**。故 **<3ms 目标为台架适配器所限，非固件可达成**（见 §8.3 结论5）。
 
 > 1ms 上报需要厂商用例支持该上报周期配置（连接参数 / 发送间隔）。
 > 若厂商用例固定为更低速率，须先向 WCH FAE 确认可配置项，**不得**自行改射频时序。
@@ -390,18 +399,22 @@ VBUS 插入  >  SK32 显式 SET_MODE  >  上次记忆模式
 - 干扰导致的连续丢包 → 由厂商用例上报链路状态，桥据此触发 `EVT_ERROR` 并可回退到重配对
 
 > **as-built 修订（结论2/3/4/5 落地后）**：上述"私有自适应跳频"经核对厂商例程**不成立**，
-> 实为固定信道，抗干扰在本工程按以下方式实现（详见 checklist §12.6）：
-> - **WCH 硬件跳频已启用**（`BRIDGE_FEATURE_RF24_HOP=1`，对照参照工程 3modekbd）：厂商
->   `RF_FrequencyHopping{Tx,Rx}` 骨架不带应用载荷、TX/RX 非对称，本桥在其上叠加自实现的载荷
->   承载——键盘=initiator 只发（空闲 10ms 轮询），Dongle=responder 只收、下行经 `RF_Rx` 的
->   自动 ACK 载荷回传。跳频同步以**外部 32.768kHz LSE**（Makefile `CLK_OSC32K=0`，D15）为基准，
->   双芯同源不失步。（早期文档误记 LSE「可选未接」，据此得出的「硬件跳频不可行」结论**作废**。）
-> - **链路层有界重传**：未收 ACK 即重发同一帧（`RF24_TX_RETRY_MAX=4`）。
+> 实为**固定信道**，抗干扰在本工程按以下方式实现（详见 checklist §12.6）：
+> - **跳频未启用**（`BRIDGE_FEATURE_RF24_HOP=0`，`RF24_HOP_PERIOD=0`，仅作将来接入自定义跳频的预留开关）。
+>   厂商 `RF_PHY_Hop` 例程的 `RF_FrequencyHopping{Tx,Rx}` 骨架**不带应用载荷**、TX 周期内全通道
+>   遍历 / RX 周期内单频点监听，属**非对称单向**用法，无法承载本桥的双向 HID/透传数据面；
+>   WCH 官方（论坛 thread-132278）亦确认「一跳多的绑定/跳频/透传需自己写算法」。故本层保持
+>   固定信道（`RF24_CHANNEL`）。**更正**：早期文档曾据此记为「跳频已启用（=1）」，与代码不符，作废。
+> - **链路层有界重传**：未收 ACK 即重发同一帧（`RF24_TX_RETRY_MAX=4`）+ `LLE_MODE_AUTO` 自动 ACK/重传。
 > - **帧级序号去重（结论3）**：帧头 `[type][link_id LE(2)][seq]`，收侧按 `seq` 去重，
 >   消除重传导致的重复上报（对照参照工程 `num + magicword`）。
 > - **绑定派生 access address（结论4）**：两端由绑定信息派生唯一 AA，降低同频互扰。
-> - **PHY 保持 1M（结论5）**：soak 10000 实测 2M PHY 丢包 1.67%（固定信道下灵敏度降约 3dB，
->   负优化），回退 1M 后 0.85%；跳频启用后仍保留 1M，2M 留待后续再评估。
+> - **PHY 采用 2M（结论5，已实测定论）**：`cfg.LLEMode = LLE_MODE_AUTO | RF24_NONHOP_MODE | LLE_MODE_PHY_2M`
+>   （`bridge_rf24_ch58x.c`），**双端同码**。早期曾判 2M 为负优化（固定信道灵敏度降约 3dB，丢包 1.67%）——
+>   彼时尚未含帧级序号去重 + 抢收自愈修复，该数据已作废；修复后复测 2M 往返丢包 **0.01%**
+>   （优于 1M 的 0.02%），往返 **8.6ms** / 上行 **3.6ms**，故正式采用 2M。
+> - **LSE**：外部 32.768kHz 晶振（D15）作为 RTC / TMOS 时基使用；跳频既未启用，其"跳频同步基准"
+>   一说仅为将来实现同步跳频时的预留用途。
 
 ### 8.4 Dongle 端契约
 
@@ -451,10 +464,12 @@ Dongle 以**复合设备**枚举（3 接口 / EP1~EP3），使主机侧无需驱
 
 ### 9.2 空闲与睡眠策略
 
-- 无 UART 活动且无射频事件持续 `T_idle`（默认 30s）→ 进 `MODE_SLEEP`
+- 自动休眠需 `SET_CONFIG key SLEEP_POLICY=0(AUTO)`（出厂默认 `MANUAL`，不自动休眠）；AUTO 下两级门限由 `SLEEP_CFG(0x25)` 配置（单位 s，落盘，0=禁用该项）：
+  - 浅睡（IDLE）：距最近一次串口接收活动达 `idle_s` 秒后允许浅睡（保持链路），实际门限取 `max(idle_s*1000ms, BRIDGE_RX_HOLD_AWAKE_MS=1500ms)`
+  - 深睡（DEEP）：未连接且空闲达 `deep_s` 秒后进 `MODE_SLEEP`（默认 30s，等价原 `T_idle`）
 - 进入前：确保绑定信息已落盘，`HID_RELEASE_ALL` 已发送
 - 处于配对窗口（`MODE_BLE_PAIR` / `MODE_2G4_PAIR`）时**不入睡**；2.4G 断链进入配对窗口后，若
-  `BRIDGE_PAIR_TIMEOUT_S`（60s）内未配对成功则超时回落 `MODE_2G4`，此后无活动即按 `T_idle` 正常入睡
+  `PAIR_START` 指定的 `duration_s`（缺省 `BRIDGE_PAIR_TIMEOUT_S`=60s）内未配对成功则超时回落 `MODE_2G4`，此后无活动即按 `deep_s` 正常入睡
   （修复：原实现停在 `MODE_2G4_PAIR` 会令自动深睡永不触发）
 
 ### 9.3 唤醒源
@@ -555,8 +570,8 @@ Dongle 以**复合设备**枚举（3 接口 / EP1~EP3），使主机侧无需驱
 |---|---|
 | UART 帧 CRC 错 | 丢弃该帧，计数；连续 10 次触发 `EVT_ERROR` |
 | UART 失联 | 见 6.4 |
-| 射频断连 | 自动重连 + 退避 |
-| 主机长时间无响应 | 断开并回退到配对态 |
+| 射频断连 | 保持当前常规模式、射频静默，**不**重开广播 / 不重入配对窗口（BLE 需 `PAIR_START`；2.4G 对端恢复自动重连） |
+| 主机长时间无响应 | 断开连接；**不**回退到配对态（保持常规模式静默） |
 | 看门狗 | 启用独立看门狗，超时复位桥 |
 | 桥复位 | 复位后必须向 SK32 发 `EVT_STATE`，并执行 `HID_RELEASE_ALL` 防卡键 |
 | OTA 失败/中断 | 标志保持 `IAP`，下次上电自动重试搬运；取消/超时写 `A` 回原 App（可回退）。仅当应用+BOOT 均损坏才需 ROM ISP（见 10.1 / 10.2） |
@@ -644,13 +659,13 @@ CH582M 侧需 SK32 侧配合完成以下改动（**不在本文件实现范围**
 
 | 指标 | 目标 |
 |---|---|
-| 2.4G 端到端按键延迟 | **≤ 8 ms**（D14 调整） |
+| 2.4G 端到端按键延迟 | **往返 ≤ 10 ms / 上行 ≤ 4 ms**（D14；soak 10000 实测往返均值 8.6ms、上行均值 3.6ms，2M PHY） |
 | BLE 端到端按键延迟 | **≤ 25 ms**（D14 目标；含串口 ≈0.26 ms + BLE 连接间隔） |
 | 串口单帧占线时间 | 键盘帧 ≤ 0.3 ms（@921600） |
 | 连续按键吞吐 | ≥ 50 次/秒（每次 1 帧键盘报文，含 5ms 间隔余量） |
 | 冷启动到可连接 | < 500 ms |
 | 模式切换完成 | < 200 ms（不含串口排队） |
-| 断线自动重连 | < 3 s |
+| 断线重连 | 常规模式不自动广播；2.4G 对端恢复即自动重连（< 3 s）；BLE 需 `PAIR_START` 重开配对窗口 |
 | 双设备枚举 | 无线模式下主机仅见 1 个 HID |
 | 续航（1000 mAh，关灯，8h/天） | ≥ 30 天（目标，需实测） |
 | 卡键 | 0 次（模式切换/断连/复位场景全覆盖） |
@@ -677,8 +692,8 @@ CH582M 侧需 SK32 侧配合完成以下改动（**不在本文件实现范围**
 | D11 | 2.4G 实现 | **直接采用厂商 2.4G 用例**（同源丐 PAD 方案），不自研射频私有协议；Dongle 用配套接收端用例 |
 | D12 | OTA 方案 | **常驻 BOOT + Stage 暂存**（不划分 A/B 双应用区）：BOOT 8K + APP_A 216K + Stage 216K；APP_A 搬运前不动，可自动重试/回退；恢复靠常驻 BOOT，ROM ISP 兜底 |
 | D13 | printf 日志 | **可配置开关**：编译期 `BRIDGE_LOG_ENABLE`/`BRIDGE_LOG_LEVEL` + 运行期 `SET_CONFIG(LOG_LEVEL)`；输出走 UART0，量产默认关 |
-| D14 | 桥串口波特率 | **921600**（8N1；原 38400，后统一提升）。单帧占线 ≤0.26ms；**HID 仍事件驱动、两帧间隔 ≥5ms**；端到端目标 2.4G ≤8ms / BLE ≤25ms（余量充足） |
-| D15 | 32K 低速时钟源 | **外部 32.768kHz LSE 晶振**（PA10=X32KI / PA11=X32KO，**已实装**）。固件以 `CLK_OSC32K=0` 选外部 LSE，作为 RTC / TMOS 时基 / WCH 硬件跳频同步的基准（**更正**：早期文档误记该晶振为「可选未接」） |
+| D14 | 桥串口波特率 | **921600**（8N1；原 38400，后统一提升）。单帧占线 ≤0.26ms；**HID 仍事件驱动、两帧间隔 ≥5ms**；端到端目标 2.4G 往返 **≤10ms** / 上行 **≤4ms**（实测 8.6 / 3.6ms，2M PHY）、BLE ≤25ms |
+| D15 | 32K 低速时钟源 | **外部 32.768kHz LSE 晶振**（PA10=X32KI / PA11=X32KO，**已实装**）。固件以 `CLK_OSC32K=0` 选外部 LSE，作为 RTC / TMOS 时基（同步跳频若将来实现可再作基准；当前跳频未启用，见 §8.3）（**更正**：早期文档误记该晶振为「可选未接」） |
 
 ### 15.2 遗留待确认
 

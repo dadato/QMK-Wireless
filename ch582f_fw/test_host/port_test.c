@@ -1134,6 +1134,8 @@ static void test_sleep_decision(void)
     CASE("休眠判定：仅 MODE_SLEEP 且无待发帧 / SRRC 期间禁眠");
 
     radio_baseline();
+    /* 默认已为 MANUAL（关闭自动休眠）：本用例正向断言需 AUTO 才允许自动深睡 */
+    CHECK_EQ(bridge_cfg_set_sleep_policy(BRIDGE_SLEEP_POLICY_AUTO), BRIDGE_OK);
 
     /* 非 MODE_SLEEP：禁止休眠（须维持连接事件） */
     CHECK(bridge_mode_get() != MODE_SLEEP);
@@ -1188,6 +1190,8 @@ static void test_shallow_sleep(void)
     CASE("浅睡：非 MODE_SLEEP 空闲时 20ms 窗口 + RXD1 唤醒开关");
 
     radio_baseline();
+    /* 默认已为 MANUAL（关闭自动休眠）：本用例正向断言需 AUTO 才自动浅睡 */
+    CHECK_EQ(bridge_cfg_set_sleep_policy(BRIDGE_SLEEP_POLICY_AUTO), BRIDGE_OK);
     CHECK(bridge_mode_get() != MODE_SLEEP);
 
     /* 排空初始 EVT_STATE，使 TX 空闲 */

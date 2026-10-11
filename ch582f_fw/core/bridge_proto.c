@@ -338,6 +338,19 @@ static void handle_pair_start(const bridge_frame_t *f)
     uint8_t mode = proto_radio_intent();
     uint8_t target = (mode == MODE_2G4 || mode == MODE_2G4_PAIR) ? (uint8_t)MODE_2G4_PAIR
                                                                  : (uint8_t)MODE_BLE_PAIR;
+
+    /* 可选持续时间参数 [duration_s LE16]：0 = 不自动关闭窗口；省略（无载荷）回默认值。
+     * 其它长度视为参数错误。 */
+    if (f->len == 0u) {
+        bridge_mode_set_pair_timeout(BRIDGE_PAIR_TIMEOUT_S);
+    } else if (f->len == 2u) {
+        bridge_mode_set_pair_timeout((uint16_t)((uint16_t)f->payload[0] |
+                                                ((uint16_t)f->payload[1] << 8)));
+    } else {
+        bridge_proto_error(f->seq, f->cmd, BRIDGE_ECODE_PARAM);
+        return;
+    }
+
     int rc = bridge_mode_request(target, true);
     if (rc == BRIDGE_OK) {
         bridge_proto_ack(f->seq, f->cmd);
@@ -370,10 +383,12 @@ static void handle_unpair(const bridge_frame_t *f)
     }
 
     if (profile == 0xFFu) {
-        for (uint8_t i = 1u; i <= (uint8_t)BRIDGE_MAX_BLE_PROFILE; i++) {
-            (void)port_radio_unpair(radio, i);
-            n++;
-        }
+        /* 全清必须把 0xFF 透传到 port 层：BLE 侧只有 sdk_ble_unpair(0xFF) 才会调
+         * GAPBOND_ERASE_ALLBONDS 清库内 LTK 绑定记录；2G4 侧忽略 profile 直接清。
+         * 旧实现循环 1..4 只清本工程多主机槽（bridge_mh_erase），库内绑定残留，
+         * 导致主机解绑后重连加密失败 → 反复建链/断链（真机实测）。 */
+        (void)port_radio_unpair(radio, 0xFFu);
+        n = 1u;
     } else if (profile >= 1u && profile <= (uint8_t)BRIDGE_MAX_BLE_PROFILE) {
         (void)port_radio_unpair(radio, profile);
         n++;
@@ -436,7 +451,7 @@ static void handle_get_version(const bridge_frame_t *f)
 /* 诊断快照（排障用）：转发 2.4G 射频层的运行时计数，见 port_radio_diag() */
 static void handle_get_diag(const bridge_frame_t *f)
 {
-    uint8_t p[24];
+    uint8_t p[64];
     uint8_t n = 0u;
 
     if (port_radio_diag(p, &n) != BRIDGE_OK || n == 0u) {
@@ -449,7 +464,7 @@ static void handle_get_diag(const bridge_frame_t *f)
 /* BLE HID 服务注册取证（排障用）：见 port_hid_diag() */
 static void handle_hid_diag(const bridge_frame_t *f)
 {
-    uint8_t p[14];
+    uint8_t p[32];            /* 14B 基础句柄 + 3×uint32 出站 notify 计数 + 6B 断链取证 */
     uint8_t n = 0u;
 
     if (port_hid_diag(p, &n) != BRIDGE_OK || n == 0u) {
@@ -591,6 +606,29 @@ static void handle_sleep(const bridge_frame_t *f)
         bridge_mode_sleep_permit(true);
     }
     bridge_proto_ack(f->seq, f->cmd);
+}
+
+/* 睡眠时间配置（0x25）：payload [idle_s LE16][deep_s LE16]，单位秒，各 2 字节。
+ *   idle_s = AUTO 策略下距最近一次串口接收活动达该秒数后允许浅睡（IDLE），0 = 禁用自动浅睡；
+ *   deep_s = AUTO 策略下未连接且空闲达该秒数后进深睡（DEEP），0 = 禁用自动深睡。
+ * 落盘保存（bridge_cfg）；仅 AUTO 策略下生效。应答 ACK / ERR PARAM。 */
+static void handle_sleep_cfg(const bridge_frame_t *f)
+{
+    if (f->len != 4u) {
+        bridge_proto_error(f->seq, f->cmd, BRIDGE_ECODE_PARAM);
+        return;
+    }
+    uint16_t idle_s = (uint16_t)((uint16_t)f->payload[0] |
+                                 ((uint16_t)f->payload[1] << 8));
+    uint16_t deep_s = (uint16_t)((uint16_t)f->payload[2] |
+                                 ((uint16_t)f->payload[3] << 8));
+
+    int rc = bridge_cfg_set_sleep_times(idle_s, deep_s);
+    if (rc == BRIDGE_OK) {
+        bridge_proto_ack(f->seq, f->cmd);
+    } else {
+        bridge_proto_error(f->seq, f->cmd, BRIDGE_ECODE_PARAM);
+    }
 }
 
 /* 按需采集 ADC（0x4D）：应答 2B 小端毫伏值（与市售模组 0x22 上报同格式） */
@@ -821,6 +859,7 @@ int bridge_proto_dispatch(const bridge_frame_t *frame)
         case CMD_NV_READ:      handle_nv_read(frame);          return BRIDGE_OK;
         case CMD_SET_BATTERY:  handle_set_battery(frame);      return BRIDGE_OK;
         case CMD_SLEEP:        handle_sleep(frame);            return BRIDGE_OK;
+        case CMD_SLEEP_CFG:    handle_sleep_cfg(frame);        return BRIDGE_OK;
         case CMD_GET_ADC:      handle_get_adc(frame);          return BRIDGE_OK;
         case CMD_SET_NAME:     handle_set_name(frame);         return BRIDGE_OK;
         case CMD_SET_USB_ID:   handle_set_usb_id(frame);       return BRIDGE_OK;

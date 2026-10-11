@@ -218,7 +218,7 @@
   /* ---------------- 场景注册（顺序即 UI 顺序） ---------------- */
   var LIST = [
     { id: 'smoke', label: 'smoke · 基础与全指令冒烟', hint: '版本/状态/MAC/ADC/PING + HID 五类 + 透传 + 越界参数', destructive: false, run: smoke },
-    { id: 'nv', label: 'nv · 用户 NV 读写', hint: '32B 单元写-读回(0/1/30/61) + 越界 ERR(PARAM)', destructive: false, run: nv },
+    { id: 'nv', label: 'nv · 用户 NV 读写', hint: '32B 单元写-读回(0/1/30/45) + 越界 ERR(PARAM)', destructive: false, run: nv },
     { id: 'config', label: 'config · SET_CONFIG 五项', hint: '五项键（跑完恢复默认）+ 未知键 ERR(PARAM)', destructive: false, run: config },
     { id: 'battery', label: 'battery · 电量注入', hint: 'SET_BATTERY(66) → EVT_STATE + GET_STATUS 一致', destructive: false, run: battery },
     { id: 'sleep', label: 'sleep · 睡眠分级', hint: 'IDLE/DEEP/WAKE 分级行为（DEEP 唤醒容错）', destructive: false, run: sleepScn },

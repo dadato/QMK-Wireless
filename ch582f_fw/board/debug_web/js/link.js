@@ -93,10 +93,8 @@
   Link.prototype.resetClock = function () { this._t0 = nowMsAbs(); };
 
   /* ---------------- 连接生命周期 ---------------- */
-  /** @param {SerialPort} [port] 不传则弹选择框 */
-  Link.prototype.connect = async function (port) {
-    if (!Link.isSupported()) { throw new F.BridgeError('当前浏览器不支持 WebSerial'); }
-    var p = port || (await navigator.serial.requestPort());
+  /** 打开端口并挂上读/写流与 RX 循环（connect 与自动探测共用） */
+  Link.prototype._attach = async function (p) {
     await p.open({ baudRate: this.baud, dataBits: 8, stopBits: 1, parity: 'none', flowControl: 'none' });
     this.port = p;
     this.closed = false;
@@ -105,9 +103,48 @@
     this.writer = p.writable.getWriter();
     this.reader = p.readable.getReader();
     this._rxTask = this._rxLoop();
+  };
+
+  /** 免 OS 弹框：遍历已授权串口，用 GET_VERSION 探测桥协议；命中者保持打开并返回。
+   *  思路对齐 via_test.js 用 navigator.hid.getDevices() 复用已授权 HID 设备。
+   *  @returns {Promise<SerialPort|null>} */
+  Link.prototype._pickAuthorized = async function () {
+    if (typeof navigator === 'undefined' || !navigator.serial || !navigator.serial.getPorts) { return null; }
+    var ports = await navigator.serial.getPorts();
+    if (!ports.length) { return null; }
+    this.log('INFO', '探测 ' + ports.length + ' 个已授权串口…');
+    for (var i = 0; i < ports.length; i++) {
+      var cand = ports[i];
+      if (cand.readable) { continue; }   /* 已被占用 */
+      var info = cand.getInfo ? cand.getInfo() : {};
+      try {
+        await this._attach(cand);
+        await this.request(F.CMD.GET_VERSION, null, 500, 1);
+        this.log('OK', '串口 #' + i + ' 应答桥协议（VID 0x' +
+          ((info.usbVendorId || 0)).toString(16) + ' / PID 0x' + ((info.usbProductId || 0)).toString(16) + '），选用该端口');
+        return cand;
+      } catch (e) {
+        await this.close();
+        this.closed = true;
+        this.seq = 0;
+      }
+    }
+    return null;
+  };
+
+  /** @param {SerialPort} [port] 不传则先复用已授权端口，命中失败才弹选择框 */
+  Link.prototype.connect = async function (port) {
+    if (!Link.isSupported()) { throw new F.BridgeError('当前浏览器不支持 WebSerial'); }
+    if (port) {
+      await this._attach(port);
+    } else {
+      var found = await this._pickAuthorized();
+      if (found) { /* 已在 _pickAuthorized 内打开 */ }
+      else { await this._attach(await navigator.serial.requestPort()); }
+    }
     if (this.localHbEnabled) { this._startHeartbeat(); }
     this.log('OK', '已打开串口 @ ' + this.baud + ' 8N1（心跳 ' + this.heartbeatMs + 'ms）');
-    return p;
+    return this.port;
   };
 
   Link.prototype._startHeartbeat = function () {

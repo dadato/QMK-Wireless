@@ -52,11 +52,19 @@
 #define CMD_FW_END           0x23u
 #define CMD_FW_ABORT         0x24u
 
+/* 0x25 睡眠时间配置（AUTO 自动休眠策略下的 IDLE/DEEP 门限）：
+ *   payload [idle_s LE16][deep_s LE16]，单位秒，各 2 字节。
+ *     idle_s：距最近一次串口接收活动达该秒数后允许浅睡（IDLE），0 = 禁用自动浅睡；
+ *     deep_s：未连接且空闲达该秒数后进深睡（DEEP），0 = 禁用自动深睡。
+ *   落盘保存（bridge_cfg）；仅 AUTO 策略下生效。 */
+#define CMD_SLEEP_CFG        0x25u
+
 /* 0x2A 诊断快照（仅排障用，不在市售模组指令集内）：
- * 应答 24B，布局见 port/ch58x/bridge_ch58x_sdk.h 的 sdk_rf24_diag()。 */
+ * 应答 24B 基础 + 16B UART 接收腿取证，共 42B，布局见 port/ch58x/bridge_ch58x_sdk.h
+ * 的 sdk_rf24_diag()。 */
 #define CMD_GET_DIAG         0x2Au
 
-/* 0x2B BLE HID 服务注册取证（仅排障用）：应答 14B，布局见
+/* 0x2B BLE HID 服务注册取证（仅排障用）：应答 26B，布局见
  * port/ch58x/bridge_ble_hidsvc.c 的 port_hid_diag()。 */
 #define CMD_HID_DIAG         0x2Bu
 

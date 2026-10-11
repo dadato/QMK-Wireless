@@ -31,7 +31,13 @@ static uint8_t    s_frame_len;
 static uint32_t   s_last_byte_ms;
 
 static uint16_t   s_crc_err_cnt;
-static uint16_t   s_drop_cnt;
+static uint16_t   s_drop_half_frame;   /* 半帧超时切分 */
+static uint16_t   s_drop_ring_full;    /* RX ring 满 */
+static uint16_t   s_drop_len_over;     /* 帧长 > BRIDGE_MAX_PAYLOAD */
+static uint16_t   s_rx_over_err;       /* UART 接收 FIFO 溢出（overrun） */
+static uint16_t   s_rx_frame_err;      /* UART 帧错 */
+static uint16_t   s_rx_par_err;        /* UART 校验错 */
+static uint32_t   s_rx_ok_cnt;         /* 合法完整帧数（32 位不回绕） */
 
 /* ---------------- TX ---------------- */
 static uint8_t  s_tx_storage[BRIDGE_TX_RING_SIZE];
@@ -73,7 +79,13 @@ void bridge_uart_init(uint32_t baudrate)
     rx_reset();
 
     s_crc_err_cnt   = 0u;
-    s_drop_cnt      = 0u;
+    s_drop_half_frame = 0u;
+    s_drop_ring_full  = 0u;
+    s_drop_len_over   = 0u;
+    s_rx_over_err     = 0u;
+    s_rx_frame_err    = 0u;
+    s_rx_par_err      = 0u;
+    s_rx_ok_cnt       = 0u;
     s_last_tx_ms    = 0u;
     s_tx_sent_once  = false;
     s_seq           = 0u;
@@ -190,7 +202,20 @@ int bridge_uart_send_hid(uint8_t cmd, const uint8_t *payload, uint8_t len)
 void bridge_uart_isr_feed(uint8_t byte)
 {
     if (!bridge_ringbuf_push(&s_rx, byte)) {
-        s_drop_cnt++;
+        s_drop_ring_full++;
+    }
+}
+
+void bridge_uart_note_rx_error(uint8_t flags)
+{
+    if (flags & BRIDGE_RX_ERR_OVERRUN) {
+        s_rx_over_err++;
+    }
+    if (flags & BRIDGE_RX_ERR_FRAME) {
+        s_rx_frame_err++;
+    }
+    if (flags & BRIDGE_RX_ERR_PARITY) {
+        s_rx_par_err++;
     }
 }
 
@@ -203,6 +228,7 @@ static void rx_on_frame_complete(bridge_frame_t *out)
     if (out->len > 0u) {
         memcpy(out->payload, s_pay, out->len);
     }
+    s_rx_ok_cnt++;
     bridge_uart_on_rx_frame();
 }
 
@@ -217,7 +243,7 @@ bool bridge_uart_get_frame(bridge_frame_t *out)
         (uint32_t)(port_millis() - s_last_byte_ms) > BRIDGE_RX_HALF_FRAME_MS) {
         LOG_W(BRIDGE_MOD_UART, "half frame timeout, drop");
         rx_reset();
-        s_drop_cnt++;
+        s_drop_half_frame++;
     }
 
     uint8_t b;
@@ -249,7 +275,7 @@ bool bridge_uart_get_frame(bridge_frame_t *out)
                     if (s_frame_len > BRIDGE_MAX_PAYLOAD) {
                         LOG_W(BRIDGE_MOD_UART, "len %u over max, drop", s_frame_len);
                         rx_reset();
-                        s_drop_cnt++;
+                        s_drop_len_over++;
                         break;
                     }
                     s_crc_run = bridge_crc16_ccitt(s_hdr, BRIDGE_HDR_LEN);
@@ -392,5 +418,40 @@ uint16_t bridge_uart_crc_error_count(void)
 
 uint16_t bridge_uart_drop_count(void)
 {
-    return s_drop_cnt;
+    return (uint16_t)(s_drop_half_frame + s_drop_ring_full + s_drop_len_over);
+}
+
+uint16_t bridge_uart_drop_half_frame(void)
+{
+    return s_drop_half_frame;
+}
+
+uint16_t bridge_uart_drop_ring_full(void)
+{
+    return s_drop_ring_full;
+}
+
+uint16_t bridge_uart_drop_len_over(void)
+{
+    return s_drop_len_over;
+}
+
+uint32_t bridge_uart_rx_ok_count(void)
+{
+    return s_rx_ok_cnt;
+}
+
+uint16_t bridge_uart_rx_overrun_count(void)
+{
+    return s_rx_over_err;
+}
+
+uint16_t bridge_uart_rx_frame_err_count(void)
+{
+    return s_rx_frame_err;
+}
+
+uint16_t bridge_uart_rx_parity_err_count(void)
+{
+    return s_rx_par_err;
 }

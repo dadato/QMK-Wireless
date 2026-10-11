@@ -371,6 +371,8 @@ static int      s_ble_adv;
 static int      s_ble_units;
 static int      s_ble_test_ch;
 static int      s_ble_unpair;
+static int      s_ble_vid;
+static int      s_ble_pid;
 
 static bool     s_rf24_up;
 static bool     s_rf24_conn;
@@ -588,6 +590,17 @@ int sdk_ble_test_mode(uint8_t mode, uint8_t channel, uint8_t power)
 
 uint8_t sdk_ble_protocol_ver(void) { return 1u; }
 
+/* 主机桩：无 TMOS 协议栈缓冲，上一轮 notify 失败帧无需延迟重发。 */
+void sdk_ble_notify_poll(void) { /* no-op */ }
+
+/* BLE DIS PnP ID（CMD_SET_USB_ID 同步）；主机桩仅记录供断言。 */
+int sdk_ble_set_ids(uint16_t vid, uint16_t pid)
+{
+    s_ble_vid = (int)vid;
+    s_ble_pid = (int)pid;
+    return BRIDGE_OK;
+}
+
 int sdk_rf24_init(void)
 {
     if (s_rf24_fail_init) {
@@ -670,14 +683,15 @@ uint8_t sdk_rf24_protocol_ver(void) { return 2u; }
 
 int sdk_rf24_diag(uint8_t *out, uint8_t *out_len)
 {
-    /* 建链取证快照（24B，布局见 bridge_ch58x_sdk.h）。
+    /* 建链取证快照（42B = 24B 基础 + 18B UART 接收腿取证，布局见
+     * bridge_ch58x_sdk.h / bridge_rf24_ch58x.c:sdk_rf24_diag）。
      * 主机端未建模 diag 计数器，按 port_host.c 的同名约定返回全 0，
      * 仅置长度；诊断数据仅供真机取证。 */
     if (out == 0 || out_len == 0) {
         return BRIDGE_ERR_PARAM;
     }
-    memset(out, 0, 24u);
-    *out_len = 24u;
+    memset(out, 0, 42u);
+    *out_len = 42u;
     return BRIDGE_OK;
 }
 

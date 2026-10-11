@@ -73,6 +73,15 @@ bool          bridge_mode_host_awake(void);
 bool          bridge_mode_sleep_permitted(void);
 void          bridge_mode_sleep_permit(bool en);
 
+/* 浅睡（IDLE，保持链路）许可谓词：在 bridge_mode_sleep_permitted() 基础上叠加
+ * 「AUTO 策略下距最近一次串口接收活动达 cfg->sleep_idle_s 秒」的时间门限
+ * （idle_s=0 表示禁用自动浅睡）。port 层浅睡门控据此收口。 */
+bool          bridge_mode_shallow_permitted(void);
+
+/* 配对窗口持续时间（秒），0 = 不自动关闭。由 PAIR_START 的可选持续时间参数设置；
+ * core bridge_mode_poll() 据此判定窗口超时并回落。不落盘（掉电回编译期默认）。 */
+void          bridge_mode_set_pair_timeout(uint16_t s);
+
 /* 模式名（日志用） */
 const char   *bridge_mode_name(bridge_mode_t mode);
 

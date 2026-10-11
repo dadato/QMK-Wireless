@@ -52,20 +52,38 @@ class SerialTransport(Transport):
     （读请求超时取消时，URB 内剩余数据被一并丢弃）。症状：模块明明在应答，
     上位机却大量 CRC 错/超时。修法：只按当前可读字节数发起读取（必然立即返回，
     不会超时取消），空闲时短轮询；绝不再发“要得比现有字节多”的小读。
+
+    写方向实测坑（同一 WCH-Link CDC）：**单次 write() 写入超过 ~12B 会被丢字节**。
+    症状：<=12B 的短帧（GET_STATUS 等）稳定；72B 的 FW_DATA 帧整写时 0/6 应答，
+    而按 <=8B 切片 + 2ms 间隔写出则 6/6 应答。修法：write() 自动按 _WRITE_SLICE
+    切片转发（短帧直通，无额外开销）。
     """
 
     READ_TIMEOUT_S = 0.2      # 仅在“已有字节”的读上使用，实际立即返回
     IDLE_POLL_S = 0.01        # 空闲轮询间隔（≤10ms 收包延迟）
+    _WRITE_SLICE = 8          # 单次 write() 最大字节数（超过则切片）
+    _WRITE_GAP_S = 0.002      # 切片间隔（秒）
 
-    def __init__(self, port: str, baud: int = 921600):
+    def __init__(self, port: str, baud: int = 921600, idle_poll_s: float = 0.01):
         import serial  # 延迟导入：自测路径不依赖 pyserial
 
+        # 空闲轮询间隔可调：收包时延 ≈ 本值/2（均值）。默认 10ms 对交互/延时测试偏慢，
+        # 时延敏感的测试（如 _diagcheck soak）传入更小值以提高测量实时性。
+        self.IDLE_POLL_S = float(idle_poll_s)
         self._ser = serial.Serial(port=port, baudrate=baud, bytesize=8,
                                   parity="N", stopbits=1,
                                   timeout=self.READ_TIMEOUT_S, write_timeout=2.0)
 
     def write(self, data: bytes) -> None:
-        self._ser.write(data)
+        # WCH-Link CDC 单次大写入会丢字节：按 _WRITE_SLICE 切片 + 间隔转发。
+        if len(data) <= self._WRITE_SLICE:
+            self._ser.write(data)
+            return
+        n = self._WRITE_SLICE
+        for i in range(0, len(data), n):
+            self._ser.write(data[i:i + n])
+            if i + n < len(data):
+                time.sleep(self._WRITE_GAP_S)
 
     def read(self, timeout: float) -> bytes:
         n = self._ser.in_waiting
