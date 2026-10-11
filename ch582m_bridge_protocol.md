@@ -255,6 +255,8 @@ board/dongle     Dongle 侧：USB 接 PC，恒禁睡，默认 2.4G
 | `BRIDGE_BATT_SRC_LOCAL` | 1 | 本地 ADC |
 | `BRIDGE_BATT_SRC_EXTERNAL` | 2 | 外部上报（`SET_BATTERY` 优先） |
 
+> `EVT_BATTERY (0x82)` **仅在 `battery_src = LOCAL`（本地 ADC）** 时才会上报；`AUTO` / `EXTERNAL` 均不产生该事件。上报的开关与发送机制由 `BATTERY_CFG (0x26)` 配置。
+
 ### 7.7 名称目标 `BRIDGE_NAME_TARGET_*`
 
 | 名称 | 值 | 说明 |
@@ -326,6 +328,8 @@ NKRO 相关：`BRIDGE_NKRO_USAGE_BASE=4`、`BRIDGE_NKRO_MAX_KEYS=6`（降级 6KR
 | `0x22` | FW_DATA | 控制 | ACK |
 | `0x23` | FW_END | 控制 | ACK |
 | `0x24` | FW_ABORT | 控制 | ACK |
+| `0x25` | SLEEP_CFG | 控制 | ACK |
+| `0x26` | BATTERY_CFG | 控制 | ACK |
 | `0x2A` | GET_DIAG | 控制 | ACK |
 | `0x7F` | PING | 控制 | ACK 或 EVT_PONG |
 
@@ -337,7 +341,7 @@ NKRO 相关：`BRIDGE_NKRO_USAGE_BASE=4`、`BRIDGE_NKRO_MAX_KEYS=6`（降级 6KR
 | --- | --- | --- |
 | `0x80` | EVT_STATE | 模式/连接/配置变化 |
 | `0x81` | EVT_LEDS | 主机 LED 状态 |
-| `0x82` | EVT_BATTERY | 电量/电压变化 |
+| `0x82` | EVT_BATTERY | 电量/电压上报（仅 `battery_src=LOCAL`，按 `BATTERY_CFG` 门控） |
 | `0x83` | EVT_PAIR_RESULT | 配对结果 |
 | `0x84` | EVT_ERROR | 各类错误 |
 | `0x85` | EVT_TUNNEL_USB | USB 透传上行 |
@@ -1137,6 +1141,8 @@ AA 55 01 81 00 01 03 83 13   (leds=0x03 → Num+Caps)
 
 ### 10.3 `0x82` EVT_BATTERY — 电量上报
 
+- **触发**：**仅当 `battery_src = LOCAL`（本地 ADC）** 且 `BATTERY_CFG (0x26)` 总开关为开时才上报；`AUTO` / `EXTERNAL` 源不产生该事件。
+- **门控**：`on_change=1` 时电量百分比变化即上报（并刷新定时基准）；`period_s≠0` 时距上次上报达该秒数定时上报（`period_s=0` 关闭定时）。
 - **payload（3B）**：
 
 | 偏移 | 字段 | 取值含义 |
@@ -1255,6 +1261,8 @@ AA 55 00 7F 2F 02 63 46
 | --- | --- | --- |
 | `last_mode` | `bridge_mode_default()` | SET_MODE |
 | `ble_profile` | 1 | SET_PROFILE |
+| `batt_report_en / batt_report_on_change / batt_report_period_s` | `1 / 1 / 10` | BATTERY_CFG |
+| `sleep_idle_s / sleep_deep_s` | `1 / 30` | SLEEP_CFG |
 | `usb_vid / usb_pid` | `0x0194 / 0x0463` | SET_USB_ID |
 | BLE 名 / USB 名 | `"SK32 Keyboard"` / `"SK32 Wireless"` | SET_NAME |
 

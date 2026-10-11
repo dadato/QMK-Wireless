@@ -269,17 +269,22 @@ static void test_tx_busy_and_gap(void)
     reset_all();
     host_advance_ms(10u);          /* 越过 init EVT_STATE 的占线 */
 
+    /* 忙优先：921600 下小帧占线不足 1ms，Mock 以整 ms 计时无法体现，
+     * 故用显式 busy 钩子验证「线路忙 → BUSY」分支。 */
+    host_uart_force_busy(true);
+    CHECK(!bridge_uart_tx_ready());
+    CHECK_EQ(bridge_uart_send(CMD_PING, 1u, 0u, 0, 0u), BRIDGE_ERR_BUSY);
+    host_uart_force_busy(false);
+
+    /* 发送成功后，未过最小间隔 → GAP */
     CHECK(bridge_uart_tx_ready());
-    CHECK_EQ(bridge_uart_send(CMD_PING, 1u, 0u, 0, 0u), BRIDGE_OK);
+    CHECK_EQ(bridge_uart_send(CMD_PING, 2u, 0u, 0, 0u), BRIDGE_OK);
 
-    /* 8B 帧占线 2ms：立即再发 → BUSY */
-    CHECK_EQ(bridge_uart_send(CMD_PING, 2u, 0u, 0, 0u), BRIDGE_ERR_BUSY);
-
-    host_advance_ms(2u);
+    host_advance_ms(BRIDGE_FRAME_MIN_GAP_MS - 1u);
     CHECK(!bridge_uart_tx_ready());               /* 未过 5ms 最小间隔 */
     CHECK_EQ(bridge_uart_send(CMD_PING, 3u, 0u, 0, 0u), BRIDGE_ERR_GAP);
 
-    host_advance_ms(3u);                          /* 累计 5ms */
+    host_advance_ms(1u);                          /* 累计 5ms */
     CHECK(bridge_uart_tx_ready());
     CHECK_EQ(bridge_uart_send(CMD_PING, 4u, 0u, 0, 0u), BRIDGE_OK);
 }
@@ -628,20 +633,90 @@ static void test_battery_curve(void)
 
 static void test_evt_battery_report(void)
 {
-    CASE("EVT_BATTERY 周期上报");
+    CASE("EVT_BATTERY 上报门控（仅 LOCAL + 开关/变化/定时）");
     reset_all();
 
-    host_advance_ms(BRIDGE_BATT_SAMPLE_MS + 1u);
-    bridge_app_poll();                     /* 采样并构造 EVT_BATTERY */
-    host_advance_ms(BRIDGE_FRAME_MIN_GAP_MS + 1u);
-    bridge_app_poll();                     /* 跨过帧间隔后真正发出 */
-
     uint8_t pay[8], len = 0u, flags = 0u;
+
+    /* 默认 battery_src=AUTO：不下发 EVT_BATTERY */
+    host_advance_ms(BRIDGE_BATT_SAMPLE_MS + 1u);
+    bridge_app_poll();
+    host_advance_ms(BRIDGE_FRAME_MIN_GAP_MS + 1u);
+    bridge_app_poll();
+    CHECK(!pump_find(EVT_BATTERY, &flags, pay, &len, 4u));
+
+    /* 切 LOCAL 后立即上报（on_change 默认开），payload [mv LE16][pct] */
+    CHECK_EQ(bridge_cfg_set_battery_src(BRIDGE_BATT_SRC_LOCAL), BRIDGE_OK);
+    host_advance_ms(BRIDGE_FRAME_MIN_GAP_MS + 1u);
+    bridge_app_poll();
+    host_advance_ms(BRIDGE_FRAME_MIN_GAP_MS + 1u);
+    bridge_app_poll();
     CHECK(pump_find(EVT_BATTERY, &flags, pay, &len, 4u));
     CHECK_EQ(len, 3u);
     CHECK_EQ(pay[0], (uint8_t)(3800u & 0xFFu));
     CHECK_EQ(pay[1], (uint8_t)(3800u >> 8));
     CHECK_EQ(pay[2], bridge_power_battery_percent());
+
+    /* 复位默认，避免影响后续用例 */
+    reset_all();
+}
+
+static void test_battery_cfg(void)
+{
+    CASE("BATTERY_CFG 0x26：配置/落盘/规整/非法长度");
+    reset_all();
+
+    uint8_t flags = 0u, pay[6], len = 0u;
+
+    /* 出厂默认：1（开）/ 1（变化即报）/ 10s */
+    CHECK_EQ(bridge_cfg_get()->batt_report_en, 1u);
+    CHECK_EQ(bridge_cfg_get()->batt_report_on_change, 1u);
+    CHECK_EQ(bridge_cfg_get()->batt_report_period_s, 10u);
+
+    /* 配置 0/1/30 → ACK */
+    {
+        uint8_t p[3] = { 0u, 1u, 30u };
+
+        run_cmd(CMD_BATTERY_CFG, 0x90u, BRIDGE_FLAG_ACK_REQ, p, 3u);
+        CHECK(pump_find(CMD_BATTERY_CFG, &flags, pay, &len, 4u));
+        CHECK_EQ(flags & BRIDGE_FLAG_ACK, BRIDGE_FLAG_ACK);
+    }
+    CHECK_EQ(bridge_cfg_get()->batt_report_en, 0u);
+    CHECK_EQ(bridge_cfg_get()->batt_report_on_change, 1u);
+    CHECK_EQ(bridge_cfg_get()->batt_report_period_s, 30u);
+
+    /* 落盘：重新初始化后仍保持 */
+    bridge_cfg_init();
+    CHECK_EQ(bridge_cfg_get()->batt_report_en, 0u);
+    CHECK_EQ(bridge_cfg_get()->batt_report_period_s, 30u);
+
+    /* 非 0 值规整为 1；period_s=0 表示关闭定时上报 */
+    {
+        uint8_t p[3] = { 5u, 2u, 0u };
+
+        run_cmd(CMD_BATTERY_CFG, 0x91u, BRIDGE_FLAG_ACK_REQ, p, 3u);
+        CHECK(pump_find(CMD_BATTERY_CFG, &flags, pay, &len, 4u));
+        CHECK_EQ(flags & BRIDGE_FLAG_ACK, BRIDGE_FLAG_ACK);
+    }
+    CHECK_EQ(bridge_cfg_get()->batt_report_en, 1u);
+    CHECK_EQ(bridge_cfg_get()->batt_report_on_change, 1u);
+    CHECK_EQ(bridge_cfg_get()->batt_report_period_s, 0u);
+
+    /* 非法长度（2 字节）→ ERR PARAM，值不变 */
+    host_tx_reset();
+    {
+        uint8_t p[2] = { 1u, 1u };
+
+        run_cmd(CMD_BATTERY_CFG, 0x92u, BRIDGE_FLAG_ACK_REQ, p, 2u);
+    }
+    CHECK(pump_find(CMD_BATTERY_CFG, &flags, pay, &len, 4u));
+    CHECK_EQ(flags & BRIDGE_FLAG_ERR, BRIDGE_FLAG_ERR);
+    CHECK_EQ(pay[0], BRIDGE_ECODE_PARAM);
+    CHECK_EQ(bridge_cfg_get()->batt_report_en, 1u);
+    CHECK_EQ(bridge_cfg_get()->batt_report_period_s, 0u);
+
+    /* 复位默认，避免影响后续用例 */
+    reset_all();
 }
 
 static void test_srrc_test_mode(void)
@@ -1831,6 +1906,7 @@ int main(void)
     test_cfg_persist();
     test_battery_curve();
     test_evt_battery_report();
+    test_battery_cfg();
     test_srrc_test_mode();
     test_set_mode_via_uart();
     test_get_mode_and_heartbeat();

@@ -249,13 +249,14 @@ VBUS 插入  >  SK32 显式 SET_MODE  >  上次记忆模式
 | `0x1C` | `SET_BATTERY` | percent(1B, 0~100) | SK32 上报电量，优先于本地 ADC；随后回 `EVT_STATE` |
 | `0x1D` | `SLEEP` | level(1B) | 睡眠分级：0=唤醒 / 1=浅睡 / 2=深睡（配 `SET_CONFIG` key `SLEEP_POLICY`） |
 | `0x25` | `SLEEP_CFG` | idle_s(2B LE), deep_s(2B LE) | 配置 AUTO 策略自动休眠时间门限（单位 s，落盘）：idle_s=距最近串口接收活动达该秒数后允许浅睡（0=禁用自动浅睡）/ deep_s=未连接且空闲达该秒数后进深睡（0=禁用自动深睡）；仅 `SLEEP_POLICY=AUTO` 生效；payload 长度非 4 → `PARAM` |
+| `0x26` | `BATTERY_CFG` | enable(1B), on_change(1B), period_s(1B) | 配置 `EVT_BATTERY` 的开关与发送机制（落盘）：enable=总开关(0=关/1=开)；on_change=电量变化时立即上报(0=关/1=开)；period_s=定时上报周期(单位 S，0=关闭定时)；payload 长度非 3 → `PARAM`；**`EVT_BATTERY` 仅 `BATTERY_SRC=LOCAL`（本地 ADC）时才会上报** |
 | `0x1E` | `GET_ADC` | — | 读本地 ADC 电压，应答 mv(2B 小端) |
 | `0x1F` | `SET_NAME` | target(1B), name... | 运行时改标识：target 0=BLE 广播名 / 1=USB(Dongle) 名（另一侧经 2.4G 中继） |
 | `0x20` | `SET_USB_ID` | vid(2B LE), pid(2B LE) | 运行时改 USB VID/PID（Dongle 侧重枚举） |
 | `0x21`~`0x24` | `FW_BEGIN` / `FW_DATA` / `FW_END` / `FW_ABORT` | 见 §10 | 键盘侧 UART OTA 帧；升级流程由 `board/ota_web` 承担 |
 | `0x7F` | `PING` | — | 心跳 |
 
-> `0x18`~`0x25` 为借鉴市售模组指令集新增的扩展命令，完整 payload 与应答格式见
+> `0x18`~`0x26` 为借鉴市售模组指令集新增的扩展命令，完整 payload 与应答格式见
 > [debug_web/SPEC.md](./ch582f_fw/board/debug_web/SPEC.md) §4.6 / §4.7；`0x0F`、`0x16`、`0x17` 保留未用。
 
 **下行（桥 → SK32）**
@@ -264,7 +265,7 @@ VBUS 插入  >  SK32 显式 SET_MODE  >  上次记忆模式
 |---|---|---|---|
 | `0x80` | `EVT_STATE` | mode, link, profile, battery | 状态变化主动上报 |
 | `0x81` | `EVT_LEDS` | led_state(1B) | Caps/Num/Scroll，映射 `keyboard_leds()` |
-| `0x82` | `EVT_BATTERY` | mv(2B), percent(1B) | 周期上报 |
+| `0x82` | `EVT_BATTERY` | mv(2B), percent(1B) | 电量上报；**仅 `BATTERY_SRC=LOCAL`（本地 ADC）时才有**，按 `BATTERY_CFG(0x26)` 的开关/变化/定时机制下发 |
 | `0x83` | `EVT_PAIR_RESULT` | result(1B), profile(1B) | 配对结果；`result=0` 成功、`=1` 失败/超时（配对窗口超过 `duration_s`（`PAIR_START` 设置，缺省 `BRIDGE_PAIR_TIMEOUT_S`=60s）未成功时发一次瞬时事件；`duration_s=0` 不超时） |
 | `0x84` | `EVT_ERROR` | code(1B) | 错误码 |
 | `0x85` | `EVT_TUNNEL_USB` | ≤64B | USB/Dongle 透传上报（VIA Raw HID 通道），无应答 |
@@ -488,6 +489,7 @@ Dongle 以**复合设备**枚举（3 接口 / EP1~EP3），使主机侧无需驱
 - ADC 周期采样电池电压（默认 10s 一次，`MODE_SLEEP` 时降频）
 - 分压系数与电池曲线在 `InfoFlash`/配置区标定
 - 阈值：低于 **20%** 首次告警一次，低于 **5%** 重复告警
+- `EVT_BATTERY` 上报门控（`BATTERY_CFG(0x26)`，落盘）：**仅 `BATTERY_SRC=LOCAL`** 时才发；`enable`=总开关，`on_change`=电量变化即报（优先并刷新定时基准），`period_s`=定时上报周期（单位 s，0=关闭定时）；默认 1 / 1 / 10s
 
 ### 9.5 充电时行为
 

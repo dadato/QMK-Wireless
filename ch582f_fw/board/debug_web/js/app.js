@@ -843,6 +843,22 @@
     el.textContent = text;
   }
 
+  /** 读取 VIA 测试区「设备标识」输入框（VID/PID），返回 {vid, pid}；非法返回 null。
+   *  接受 1~4 位十六进制，可带或不带 0x 前缀。 */
+  function readViaIds() {
+    function parse(s) {
+      var t = String(s === undefined || s === null ? '' : s).trim().replace(/^0x/i, '');
+      if (!/^[0-9a-fA-F]{1,4}$/.test(t)) { return null; }
+      return parseInt(t, 16);
+    }
+    var vidEl = $('viaVid');
+    var pidEl = $('viaPid');
+    var vid = parse(vidEl && vidEl.value);
+    var pid = parse(pidEl && pidEl.value);
+    if (vid === null || pid === null) { return null; }
+    return { vid: vid, pid: pid };
+  }
+
   /* 启动：写入自检报文预览，并按浏览器能力启用/禁用两条通路 */
   (function initVia() {
     $('viaTxHex').value = Via.hex(Via.buildSelfTest());
@@ -878,8 +894,17 @@
       return;
     }
     btn.disabled = true;
+    var idsA = readViaIds();
+    if (!idsA) {
+      btn.disabled = false;
+      viaBadge($('viaHidState'), '未连接', 'fail');
+      setResult($('viaHidResult'), 'VID/PID 输入非法（应为 1~4 位十六进制，如 0194 / 0464）', 'err');
+      viaLog('ERR', '通路 A：VID/PID 输入非法，已取消连接');
+      return;
+    }
     var inst = new Via.ViaHid({
       log: viaLog,
+      filters: Via.makeFilter(idsA.vid, idsA.pid),
       onDisconnect: function () {
         viaHid = null;
         viaBadge($('viaHidState'), '已断开', 'fail');
@@ -927,8 +952,17 @@
       return;
     }
     btn.disabled = true;
+    var idsB = readViaIds();
+    if (!idsB) {
+      btn.disabled = false;
+      viaBadge($('viaBleState'), '未连接', 'fail');
+      setResult($('viaBleResult'), 'VID/PID 输入非法（应为 1~4 位十六进制，如 0194 / 0464）', 'err');
+      viaLog('ERR', '通路 B：VID/PID 输入非法，已取消连接');
+      return;
+    }
     var inst = new Via.ViaBle({
       log: viaLog,
+      filters: Via.makeFilter(idsB.vid, idsB.pid),
       onDisconnect: function () {
         viaBle = null;
         viaBadge($('viaBleState'), '已断开', 'fail');

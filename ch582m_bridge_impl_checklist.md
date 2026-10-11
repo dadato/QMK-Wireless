@@ -120,6 +120,8 @@
 | `0x22` | `FW_DATA` | `static void handle_fw_data(const bridge_frame_t *f);` | 是 |
 | `0x23` | `FW_END` | `static void handle_fw_end(const bridge_frame_t *f);` | 是（应答并 flush 后进 IAP） |
 | `0x24` | `FW_ABORT` | `static void handle_fw_abort(const bridge_frame_t *f);` | 是 |
+| `0x25` | `SLEEP_CFG` | `static void handle_sleep_cfg(const bridge_frame_t *f);` | 是 |
+| `0x26` | `BATTERY_CFG` | `static void handle_battery_cfg(const bridge_frame_t *f);` | 是 |
 | `0x7F` | `PING` | 内联处理（心跳开时回 `bridge_evt_pong()`） | 是（回 `PONG`） |
 
 > 统一返回约定：处理函数为 `void`，成功/失败由函数内应答表达；`bridge_proto_dispatch()` 对未支持命令返回 `BRIDGE_ERR_UNSUPPORTED`。
@@ -131,7 +133,7 @@
 |---|---|---|
 | `0x80` | `EVT_STATE` | `void bridge_evt_state(void);` |
 | `0x81` | `EVT_LEDS` | `void bridge_evt_leds(uint8_t led_state);` |
-| `0x82` | `EVT_BATTERY` | `void bridge_evt_battery(uint16_t mv, uint8_t percent);` |
+| `0x82` | `EVT_BATTERY` | `void bridge_evt_battery(uint16_t mv, uint8_t percent);`（仅 `battery_src=LOCAL` 且 `BATTERY_CFG` 总开关开启时上报） |
 | `0x83` | `EVT_PAIR_RESULT` | `void bridge_evt_pair_result(uint8_t result, uint8_t profile);` |
 | `0x84` | `EVT_ERROR` | `void bridge_evt_error(uint8_t code);` |
 | `0x85` | `EVT_TUNNEL_USB` | `void bridge_evt_tunnel(uint8_t kind, const uint8_t *payload, uint8_t len);`（`kind = BRIDGE_TUNNEL_USB`） |

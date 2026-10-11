@@ -148,6 +148,7 @@ CH582F 模组 UART1 (PA8=RXD1 / PA9=TXD1)
 | `SET_BATTERY` | `0x1C` | `[percent u8]` | —（随后 `EVT_STATE`） | 注入电量 |
 | `SLEEP` | `0x1D` | `[level u8]` | — | `0`=唤醒 / `1`=浅睡 / `2`=深睡 |
 | `SLEEP_CFG` | `0x25` | `[idle_s u16 LE][deep_s u16 LE]` | — | 配置 AUTO 策略自动休眠门限（单位 s，落盘）：`idle_s`=距最近串口接收活动达该秒数后允许浅睡（0=禁用自动浅睡）；`deep_s`=未连接且空闲达该秒数后进深睡（0=禁用自动深睡）；`len≠4` → `ERR(PARAM)` |
+| `BATTERY_CFG` | `0x26` | `[enable u8][on_change u8][period_s u8]` | — | 配置 `EVT_BATTERY` 的开关与发送机制（落盘）：`enable`=总开关（0=关/1=开）；`on_change`=电量变化时立即上报（0=关/1=开）；`period_s`=定时上报周期（单位 S，0=关闭定时）；`len≠3` → `ERR(PARAM)`；**`EVT_BATTERY` 仅在 `battery_src=LOCAL`（本地 ADC）时才会上报** |
 | `GET_ADC` | `0x1E` | — | `[mv u16 LE]` | 采集电压 |
 | `SET_NAME` | `0x1F` | `[target u8][name...]` | — | 改名（`target` 0=BLE 广播名 / 1=Dongle USB 名，经 2.4G 转发） |
 | `SET_USB_ID` | `0x20` | `[vid u16 LE][pid u16 LE]` | — | 改写 USB 标识（Dongle 侧重枚举） |
@@ -193,7 +194,7 @@ CH582F 模组 UART1 (PA8=RXD1 / PA9=TXD1)
 | --- | --- | --- | --- |
 | `EVT_STATE` | `0x80` | `[mode u8][connected u8][profile u8][battery u8]` | 状态变更 |
 | `EVT_LEDS` | `0x81` | `[led_state u8]` | 主机 LED（Num/Caps/Scroll） |
-| `EVT_BATTERY` | `0x82` | `[mv u16 LE][percent u8]` | 电量上报 |
+| `EVT_BATTERY` | `0x82` | `[mv u16 LE][percent u8]` | 电量上报（仅 `battery_src=LOCAL` 时按 `BATTERY_CFG` 开关/变化/定时下发） |
 | `EVT_PAIR_RESULT` | `0x83` | `[result u8][profile u8]` | 配对结果（`result` 0=成功 / 1=失败或配对窗口超时） |
 | `EVT_ERROR` | `0x84` | `[code u8]` | 错误码（见 4.10） |
 | `EVT_TUNNEL_USB` | `0x85` | ≤64B | USB 透传上报 |

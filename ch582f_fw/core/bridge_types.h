@@ -59,6 +59,14 @@
  *   落盘保存（bridge_cfg）；仅 AUTO 策略下生效。 */
 #define CMD_SLEEP_CFG        0x25u
 
+/* 0x26 电量上报配置（EVT_BATTERY 的开关与发送机制）：
+ *   payload [enable][on_change][period_s]，各 1 字节。
+ *     enable    ：EVT_BATTERY 总开关，0 = 关 / 1 = 开；
+ *     on_change ：电量变化时立即上报，0 = 关 / 1 = 开；
+ *     period_s  ：定时上报周期，单位 S，0 = 关闭定时上报。
+ *   落盘保存（bridge_cfg）；EVT_BATTERY 仅在 battery_src = LOCAL（本地 ADC）时才会上报。 */
+#define CMD_BATTERY_CFG      0x26u
+
 /* 0x2A 诊断快照（仅排障用，不在市售模组指令集内）：
  * 应答 24B 基础 + 16B UART 接收腿取证，共 42B，布局见 port/ch58x/bridge_ch58x_sdk.h
  * 的 sdk_rf24_diag()。 */

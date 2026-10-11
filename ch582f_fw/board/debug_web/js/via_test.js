@@ -48,6 +48,14 @@
   /* 通路 B 筛选（键盘模组 BLE HOGP） */
   var FILTER_BLE    = [{ usagePage: HID_USAGE_PAGE, vendorId: HID_VID_BLE, productId: HID_PID_BLE }];
 
+  /* 由外部输入的 VID/PID 动态构造 WebHID 过滤器（usagePage 固定 0xFF60）。
+   * 供 app.js 读取 UI 输入后传入 ViaHid/ViaBle；参数非法返回 null，调用方回退默认。 */
+  function makeFilter(vendorId, productId) {
+    function ok(v) { return typeof v === 'number' && isFinite(v) && v >= 0 && v <= 0xFFFF; }
+    if (!ok(vendorId) || !ok(productId)) { return null; }
+    return [{ usagePage: HID_USAGE_PAGE, vendorId: vendorId, productId: productId }];
+  }
+
   var VIA_ID_GET_PROTOCOL_VERSION = 0x01;
   var VIA_PROTOCOL_VERSION        = 0x000D;
 
@@ -415,7 +423,7 @@
       onDisconnect: opts.onDisconnect,
       reportId: BLE_RID_RAW,
       bleKind: true,
-      filters: FILTER_BLE
+      filters: opts.filters || FILTER_BLE
     });
   }
   ViaBle.prototype = Object.create(ViaHid.prototype);
@@ -534,6 +542,7 @@
     HID_PID_BLE: HID_PID_BLE,
     FILTER_DONGLE: FILTER_DONGLE,
     FILTER_BLE: FILTER_BLE,
+    makeFilter: makeFilter,
     ViaHid: ViaHid,
     ViaBle: ViaBle,
     ViaError: ViaError,

@@ -152,6 +152,13 @@
       Uint8Array.of(i & 0xFF, (i >> 8) & 0xFF, d & 0xFF, (d >> 8) & 0xFF));
     return { frame: fr, text: '睡眠时间已配置 IDLE=' + i + 's / DEEP=' + d + 's（0=禁用该项自动休眠，仅 AUTO 策略生效）' };
   };
+  Commands.prototype.batteryCfg = async function (enable, onChange, periodS) {
+    var en = enable ? 1 : 0, oc = onChange ? 1 : 0, ps = periodS & 0xFF;
+    var fr = await this.link.request(F.CMD.BATTERY_CFG, Uint8Array.of(en, oc, ps));
+    return { frame: fr, text: '电量上报已配置：总开关=' + (en ? '开' : '关') +
+      ' / 变化即报=' + (oc ? '开' : '关') + ' / 定时=' + (ps === 0 ? '关' : ps + 's') +
+      '（EVT_BATTERY 仅在 battery_src=LOCAL 时上报）' };
+  };
   Commands.prototype.nvWrite = async function (addr, data) {
     if (data.length !== F.NV_UNIT) {
       throw new F.BridgeError('NV 单元必须 ' + F.NV_UNIT + 'B，当前 ' + data.length + 'B');
@@ -416,6 +423,13 @@
           { key: 'idle_s', label: 'IDLE 门限s (0=禁用)', type: 'number', def: '1', min: 0, max: 65535 },
           { key: 'deep_s', label: 'DEEP 门限s (0=禁用)', type: 'number', def: '30', min: 0, max: 65535 }
         ], run: function (c, v) { return c.sleepCfg(parseInt(v.idle_s, 10), parseInt(v.deep_s, 10)); } },
+        { id: 'battery_cfg', label: 'BATTERY_CFG', cmd: F.CMD.BATTERY_CFG,
+          desc: '配置 EVT_BATTERY 的开关与发送机制，落盘保存。\n请求：[enable][on_change][period_s]（各 1B）。\n  enable：总开关，0=关 / 1=开；\n  on_change：电量变化时立即上报，0=关 / 1=开；\n  period_s：定时上报周期，单位 S，0=关闭定时上报。\n边界：len≠3 → PARAM。\n现象：EVT_BATTERY 仅在 battery_src=LOCAL（本地 ADC）时才会上报；变化即报优先于定时并刷新定时基准。\n默认：enable=1 / on_change=1 / period_s=10。',
+          fields: [
+          { key: 'enable', label: '总开关', type: 'select', def: '1', options: [['1', '1 = 开'], ['0', '0 = 关']] },
+          { key: 'on_change', label: '变化即报', type: 'select', def: '1', options: [['1', '1 = 开'], ['0', '0 = 关']] },
+          { key: 'period_s', label: '定时上报s (0=关)', type: 'number', def: '10', min: 0, max: 255 }
+        ], run: function (c, v) { return c.batteryCfg(parseInt(v.enable, 10) !== 0, parseInt(v.on_change, 10) !== 0, parseInt(v.period_s, 10)); } },
         { id: 'nv_read', label: 'NV_READ', cmd: F.CMD.NV_READ,
           desc: '读用户 NV 单元。\n请求：[addr]（1B）。\naddr 取值：0..45（0x00..0x2D），共 46 个单元 × 32B。\n应答：ACK + 33B [addr][data0..31]。\n边界：len<1 或 addr≥46 → PARAM；底层读失败 → STATE。',
           fields: [

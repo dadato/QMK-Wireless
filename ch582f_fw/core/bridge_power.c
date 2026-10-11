@@ -12,6 +12,8 @@ static uint8_t  s_pct;
 static uint8_t  s_alarm;
 static bool     s_charger;
 static uint32_t s_last_sample_ms;
+static uint32_t s_last_report_ms;   /* 上次 EVT_BATTERY 上报时刻 */
+static uint8_t  s_last_report_pct;  /* 上次上报百分比；0xFF=尚未上报 */
 static uint8_t  s_ext_pct;      /* 主控下发的电量（0x87） */
 static bool     s_ext_valid;
 
@@ -24,6 +26,8 @@ void bridge_power_init(void)
     s_ext_pct        = 0u;
     s_ext_valid      = false;
     s_last_sample_ms = port_millis();
+    s_last_report_ms = s_last_sample_ms;
+    s_last_report_pct = 0xFFu;
 
     bridge_power_sample();
     LOG_I(BRIDGE_MOD_PWR, "init mv=%u pct=%u chrg=%u",
@@ -96,9 +100,28 @@ void bridge_power_poll(void)
     if (bridge_mode_get() == MODE_SLEEP) {
         period *= 4u;   /* 休眠降频（规格 9.4） */
     }
-    if ((uint32_t)(port_millis() - s_last_sample_ms) >= period) {
+    uint32_t now = port_millis();
+    if ((uint32_t)(now - s_last_sample_ms) >= period) {
         bridge_power_sample();
+    }
+
+    /* EVT_BATTERY 上报门控（CMD_BATTERY_CFG）：
+     *   仅 battery_src = LOCAL（本地 ADC）时才有该事件；且总开关开启。
+     *   on_change 优先（电量变化即报并刷新定时基准），否则按 period_s 定时上报。 */
+    const bridge_cfg_t *cfg = bridge_cfg_get();
+    if (cfg->battery_src != BRIDGE_BATT_SRC_LOCAL || cfg->batt_report_en == 0u) {
+        return;
+    }
+
+    bool changed = (s_last_report_pct != s_pct);
+    bool due = (cfg->batt_report_period_s != 0u) &&
+               ((uint32_t)(now - s_last_report_ms) >=
+                (uint32_t)cfg->batt_report_period_s * 1000u);
+
+    if ((changed && cfg->batt_report_on_change != 0u) || due) {
         bridge_evt_battery(s_mv, s_pct);
+        s_last_report_pct = s_pct;
+        s_last_report_ms  = now;
     }
 }
 

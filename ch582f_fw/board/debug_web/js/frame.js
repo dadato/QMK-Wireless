@@ -67,6 +67,7 @@
     FW_END: 0x23,
     FW_ABORT: 0x24,
     SLEEP_CFG: 0x25,  /* SLEEP 时间配置：payload [idle_s LE16][deep_s LE16]，单位 s */
+    BATTERY_CFG: 0x26, /* 电量上报配置：payload [enable][on_change][period_s]，各 1B（仅 LOCAL 源有 EVT_BATTERY） */
 
     GET_DIAG: 0x2A,   /* 2.4G 诊断快照（排障用，不在市售模组指令集内；应答 24B） */
     HID_DIAG: 0x2B,   /* BLE HID 服务注册取证（排障用；应答 26B） */
@@ -104,7 +105,7 @@
     0x18: 'TUNNEL_USB', 0x19: 'TUNNEL_BLE', 0x1A: 'NV_WRITE', 0x1B: 'NV_READ',
     0x1C: 'SET_BATTERY', 0x1D: 'SLEEP', 0x1E: 'GET_ADC', 0x1F: 'SET_NAME',
     0x20: 'SET_USB_ID', 0x21: 'FW_BEGIN', 0x22: 'FW_DATA', 0x23: 'FW_END',
-    0x24: 'FW_ABORT', 0x25: 'SLEEP_CFG', 0x2A: 'GET_DIAG', 0x2B: 'HID_DIAG', 0x7F: 'PING'
+    0x24: 'FW_ABORT', 0x25: 'SLEEP_CFG', 0x26: 'BATTERY_CFG', 0x2A: 'GET_DIAG', 0x2B: 'HID_DIAG', 0x7F: 'PING'
   };
 
   var EVENT_NAMES = {
