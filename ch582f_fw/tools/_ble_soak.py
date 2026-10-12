@@ -1,6 +1,6 @@
-"""临时工具：通路 B（BLE HOGP vendor RID5）大样本 VIA 往返 soak，对齐 _diagcheck.py do_soak 口径。
+"""临时工具：通路 B（BLE HOGP vendor RID0）大样本 VIA 往返 soak，对齐 _diagcheck.py do_soak 口径。
 
-流程：写键盘模组 BLE HOGP vendor 集合（RID5，32B，payload[28..31]=LE32 序号）
+流程：写键盘模组 BLE HOGP vendor 集合（RID0，32B，payload[28..31]=LE32 序号）
       -> 模组 UART EVT_TUNNEL_BLE -> 本脚本按原 payload 回显 CMD_TUNNEL_BLE
       -> 模组 HOGP vendor IN -> 逐帧按序号配对统计成功/丢包（严格一发一收）。
 
@@ -10,7 +10,7 @@
   重发耗尽仍无应答才记丢包。
 
 根因方向判定（重发事件分类，用于区分 BLE 两条腿）：
-  腿A = 主机(BLE HID write RID5) -> 模组；腿B = 模组 UART EVT_TUNNEL_BLE -> 本脚本；
+  腿A = 主机(BLE HID write RID0) -> 模组；腿B = 模组 UART EVT_TUNNEL_BLE -> 本脚本；
   腿C = 本脚本 UART CMD_TUNNEL_BLE 回显 -> 模组；腿D = 模组 BLE HOGP IN notify -> 本脚本。
   某帧首次超时（尚未重发）时若其序号 **已在 dl_seqs**（腿B 已到）→ 腿A 已成功，
   丢的是腿D（模组 notify）；若**不在 dl_seqs** → 腿A 未到模组（主机 BLE 写丢）。
@@ -30,7 +30,7 @@ import hid  # noqa: E402
 
 KEYBD = "COM19"   # USB\VID_1A86&PID_8010&MI_01\8&20449A78&3&0001 (键盘侧 WCH-Link SERIAL)
 BAUD = 921600
-RID = 5          # BLE HOGP vendor 报表 ID（QMK BLE 键盘固定占用 1..4，vendor 用 5）
+RID = 0          # BLE HOGP vendor 报表 ID（隐式 Report ID 0；VIA WebHID 硬编码 sendReport(0,...)）
 OFF = 28         # 序号置于 payload[28..31]（LE32），与 do_soak 一致（32 位不回绕，逐帧唯一）
 
 RETRY_MAX = 3    # 整帧重发上限（用户语义：无应答最多重发三次）

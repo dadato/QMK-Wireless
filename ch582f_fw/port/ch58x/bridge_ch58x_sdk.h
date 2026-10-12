@@ -185,7 +185,7 @@ void     sdk_tmos_process(void);              /* TMOS_SystemProcess() */
 /* ---------------- 厂商例程需回调本工程的入口（见清单 2.2） ---------------- */
 /* 以下函数由本工程实现（bridge_ch58x_sdk.c）、由**厂商例程文件**调用：
  *   - `sdk_ble_on_led_report()`  ← bridge_ble_hidsvc.c 的 Output Report 回调
- *   - `sdk_ble_on_raw_report()`  ← bridge_ble_hidsvc.c 的 VIA vendor Output Report(RID 5)
+ *   - `sdk_ble_on_raw_report()`  ← bridge_ble_hidsvc.c 的 VIA vendor Output Report(RID 0)
  *   - `sdk_ble_on_connect()`     ← bridge_ble_hidsvc.c 的 GAP 状态回调
  *   - `sdk_ble_on_disconnect()`  ← 同上
  *   - `sdk_rf24_on_recv()`       ← 厂商 2.4G 用例的收包回调（**必须在任务上下文调用**）
@@ -194,7 +194,7 @@ void     sdk_tmos_process(void);              /* TMOS_SystemProcess() */
  * 它们内部统一转成 bridge_ch58x_radio_evt() / bridge_ch58x_radio_hid_in()。
  */
 void     sdk_ble_on_led_report(uint8_t led_state);
-/* 主机经 BLE HID vendor 报表（RID 5，QMK Raw HID）下发的 VIA 报文：
+/* 主机经 BLE HID vendor 报表（RID 0 隐式，QMK Raw HID）下发的 VIA 报文：
  * 走 BLE 隧道上报 SK32（bridge_ch58x_radio_tunnel_in(BRIDGE_TUNNEL_BLE,...)）。
  * 实现位于 bridge_ch58x_callbacks.c（纯翻译层，可在主机端验证）。 */
 void     sdk_ble_on_raw_report(const uint8_t *d, uint8_t len);

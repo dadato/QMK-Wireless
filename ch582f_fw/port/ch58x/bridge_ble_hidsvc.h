@@ -7,10 +7,17 @@
  *   由本文件提供同名同签名的 Hid_AddService / Hid_SetParameter / Hid_GetParameter
  *   与 hidReportMapLen / hidProtocolMode（hiddev.c 依赖这两个全局）。
  *
- * Report ID 分配（一旦使用非 0 Report ID，所有报表都必须带 ID）：
- *   1 = 键盘输入 8B    2 = 多媒体输入 2B
- *   3 = 系统控制输入 1B  4 = 键盘 LED 输出 1B
- *   5 = VIA vendor 输入/输出 各 32B（QMK Raw HID，Usage Page 0xFF60/Usage 0x61）
+ * 报表描述符被拆成**两个独立的 0x1812 HID 服务实例**，因为单份 report map
+ * 无法同时满足两个约束：
+ *   实例 1（键盘/多媒体/LED）—— 4 个顶层集合，必须显式声明 Report ID：
+ *     1 = 键盘输入 8B    2 = 多媒体输入 2B
+ *     3 = 系统控制输入 1B  4 = 键盘 LED 输出 1B
+ *   实例 2（VIA vendor）—— 只有 vendor 一个顶层集合，**不声明任何 Report ID 项**
+ *     （隐式 RID 0），32B 输入 + 32B 输出（QMK Raw HID，Usage Page 0xFF60/0x61）。
+ *   官方 VIA 的 WebHID 硬编码 sendReport(0, data)，需要 Report Reference 为
+ *   ID 0 的 Output 特征；而 Windows 校验规则要求「默认报告 ID 只能用于
+ *   只含一个顶层集合且未显式声明任何 Report ID 的设备」，故必须把 vendor
+ *   单列为一个独立服务实例。详见 bridge_ble_hidsvc.c。
  * 鼠标（4B）与 NKRO（16B）本服务不含对应报表：BLE 模式下上游已把 NKRO
  * 降级为 8B 键盘报文，鼠标报文在 BLE 侧返回 BRIDGE_ERR_UNSUPPORTED。
  */
@@ -24,7 +31,10 @@
 #define BRIDGE_HID_RID_CONSUMER  2u
 #define BRIDGE_HID_RID_SYSTEM    3u
 #define BRIDGE_HID_RID_LED_OUT   4u
-#define BRIDGE_HID_RID_RAW       5u
+/* VIA vendor 集合在第二个独立 HID 服务实例中使用**隐式 Report ID 0**
+ * （不显式声明 Report ID 项）。官方 VIA 的 WebHID 硬编码 sendReport(0, data)，
+ * 需要 Report Reference = ID 0 的 Output 特征才能写入。 */
+#define BRIDGE_HID_RID_RAW       0u
 
 /* VIA vendor 报表长度（QMK Raw HID 端点大小 RAW_EPSIZE == 32） */
 #define BRIDGE_HID_RAW_REPORT_LEN 32u

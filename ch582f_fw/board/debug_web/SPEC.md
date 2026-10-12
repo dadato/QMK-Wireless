@@ -21,7 +21,7 @@
 - **模拟键盘数据流**：构造并注入 HID 报文（键盘 6KRO / NKRO / 多媒体 / 鼠标 / 系统键），
   支持文本打字、宏/序列、压力与速率测试；
 - **监视与诊断**：实时帧监视器、事件解码、链路健康度、统计计数、日志导出；
-- **回路验证**：经 WebHID（Dongle，RID 0）与 WebHID（模组 BLE，HOGP RID 5）做 VIA 透传往返，验证
+- **回路验证**：经 WebHID（Dongle，RID 0）与 WebHID（模组 BLE，HOGP RID 0 隐式）做 VIA 透传往返，验证
   「网页 → 蓝牙/2.4G → 模组 → UART → SK32」完整回路（§5.8）。
 
 **不在范围内**：OTA 固件升级（见 `board/ota_web`）；SK32/QMK 侧固件改动；
@@ -153,7 +153,7 @@ CH582F 模组 UART1 (PA8=RXD1 / PA9=TXD1)
 | `SET_NAME` | `0x1F` | `[target u8][name...]` | — | 改名（`target` 0=BLE 广播名 / 1=Dongle USB 名，经 2.4G 转发） |
 | `SET_USB_ID` | `0x20` | `[vid u16 LE][pid u16 LE]` | — | 改写 USB 标识（Dongle 侧重枚举） |
 | `GET_DIAG` | `0x2A` | — | `[0]up [1]conn [2]bound [3]tx_busy [4]tx_q_cnt [5]hb_miss [6..7]report_period [8..9]tx_submit_ok [10..11]tx_submit_fail [12..13]tx_done_ok [14..15]tx_done_fail [16..17]tx_drop [18..19]rx_any [20..21]rx_pair [22..23]rx_data_bad`（`[6..23]` 均 LE16） | 2.4G 射频诊断快照（24B，排障用） |
-| `HID_DIAG` | `0x2B` | — | `[0]reg [1..2]hid_handle [3..4]map_handle [5..6]raw_in_handle [7..8]raw_out_handle [9]report_cnt [10]attr_cnt [11]reset_src [12]stage_prev [13]stage_now [14..17]notify_fail [18..21]notify_retry_ok [22..25]notify_retry_drop`（`[1..8]` 均 LE16；`[14..25]` 均 uint32 LE） | BLE HID 服务注册取证（26B，排障用）：`reg`=`GATTServApp_RegisterService` 返回值（`0`=成功/`0xFF`=未调用）；`raw_in/out_handle`=RID5 IN/OUT 属性 handle；`[14..25]` 为出站 notify 计数（`HidDev_Report` 失败 / 延迟重发成功 / 延迟重发仍失败）；仅键盘模组支持，Dongle 侧 → `ERR(STATE)` |
+| `HID_DIAG` | `0x2B` | — | `[0]reg [1..2]hid_handle [3..4]map_handle [5..6]raw_in_handle [7..8]raw_out_handle [9]report_cnt [10]attr_cnt [11]reset_src [12]stage_prev [13]stage_now [14..17]notify_fail [18..21]notify_retry_ok [22..25]notify_retry_drop`（`[1..8]` 均 LE16；`[14..25]` 均 uint32 LE） | BLE HID 服务注册取证（26B，排障用）：`reg`=`GATTServApp_RegisterService` 返回值（`0`=成功/`0xFF`=未调用）；`raw_in/out_handle`=RID0 IN/OUT 属性 handle；`[14..25]` 为出站 notify 计数（`HidDev_Report` 失败 / 延迟重发成功 / 延迟重发仍失败）；仅键盘模组支持，Dongle 侧 → `ERR(STATE)` |
 | `PING` | `0x7F` | — | `EVT_PONG`（`flags=ACK`） | 心跳/往返 |
 | `FW_BEGIN/DATA/END/ABORT` | `0x21~0x24` | 见 [ota_web SPEC §4.6](file:///c:/Users/Administrator/Desktop/qmk/qmk_firmware/wireless/ch582f_fw/board/ota_web/SPEC.md) | — | 仅保留「调试/引用」，升级流程由 `ota_web` 承担 |
 
@@ -325,7 +325,7 @@ GET_STATUS  请求：AA 55 00 02 05 00                      CRC16
 | 通路 | 下行 | 上行 |
 | --- | --- | --- |
 | A｜WebHID → Dongle → 2.4G | 网页写 Dongle IF2 `EP3 OUT`(32B, RID 0) → Dongle → 2.4G → 键盘模组 → `UART EVT_TUNNEL_USB(0x85)` → SK32 `raw_hid_receive` | SK32 `raw_hid_send` → UART `CMD_TUNNEL_USB(0x18)` → 模组 → 2.4G → Dongle `EP3 IN`(恒 32B) |
-| B｜WebHID → 模组 BLE | 网页写 HOGP vendor `OUT`(32B, RID 5, Usage Page `0xFF60`/Usage `0x61`) → 模组 `sdk_ble_on_raw_report` → `UART EVT_TUNNEL_BLE(0x86)` → SK32 | SK32 `raw_hid_send` → UART `CMD_TUNNEL_BLE(0x19)` → 模组 → HOGP vendor `IN`(Notify, RID 5) → 网页 |
+| B｜WebHID → 模组 BLE | 网页写 HOGP vendor `OUT`(32B, RID 0 隐式, Usage Page `0xFF60`/Usage `0x61`) → 模组 `sdk_ble_on_raw_report` → `UART EVT_TUNNEL_BLE(0x86)` → SK32 | SK32 `raw_hid_send` → UART `CMD_TUNNEL_BLE(0x19)` → 模组 → HOGP vendor `IN`(Notify, RID 0 隐式) → 网页 |
 
 **报文约定（关键，与 `ota_web` 的 OTA 报文语义不同）**
 
@@ -416,7 +416,7 @@ GET_STATUS  请求：AA 55 00 02 05 00                      CRC16
 | 真机-监视 | 触发事件/心跳，监视器完整呈现且 CRC 错为 0 | 无丢帧、无未处理帧 |
 | 真机-HID | 2.4G 已配对 / BLE 已配对下打字与各 HID 类 | PC/手机端出现对应输入 |
 | 真机-场景 | §5.7 非破坏性集合 | 全 PASS，无残留副作用 |
-| 真机-VIA 回路 | §5.8 通路 A：WebHID→Dongle→2.4G→模组→UART→SK32 的 `GET_PROTOCOL_VERSION` 往返；通路 B：WebHID→模组 BLE(HOGP RID 5)→UART→SK32 | PASS（回包 `id=01 ver=0x000D`）；通路 B 需键盘处于 BLE 模式且已配对。另：BLE HID 服务注册可经 `HID_DIAG(0x2B)` 取证（`reg=0`、RID5 IN/OUT handle 非零） |
+| 真机-VIA 回路 | §5.8 通路 A：WebHID→Dongle→2.4G→模组→UART→SK32 的 `GET_PROTOCOL_VERSION` 往返；通路 B：WebHID→模组 BLE(HOGP RID 0)→UART→SK32 | PASS（回包 `id=01 ver=0x000D`）；通路 B 需键盘处于 BLE 模式且已配对。另：BLE HID 服务注册可经 `HID_DIAG(0x2B)` 取证（`reg=0`、RID0 IN/OUT handle 非零） |
 | 异常 | 拔线、错误 CRC、越界参数、重复报文抑制、链路断开 | 提示正确、可恢复、不卡键 |
 
 ---
@@ -445,7 +445,7 @@ GET_STATUS  请求：AA 55 00 02 05 00                      CRC16
 | **Phase 2** | 帧层 + 链路层 + 连接区 + 监视器 | `js/crc16.js` `js/frame.js` `js/link.js` `js/monitor.js` + `index.html`/`css` |
 | **Phase 3** | 命令台 + 状态仪表盘 + 事件解码 | `js/commands.js` `js/decode.js` |
 | **Phase 4** | HID 数据流模拟 + 场景用例 | `js/hid_sim.js` `js/scenarios.js` |
-| **Phase 5** | VIA 隧道回路测试 Tab（两条通路均为 WebHID：Dongle RID 0 / 模组 BLE RID 5） | `js/via_test.js` + `index.html`/`app.js` |
+| **Phase 5** | VIA 隧道回路测试 Tab（两条通路均为 WebHID：Dongle RID 0 / 模组 BLE RID 0） | `js/via_test.js` + `index.html`/`app.js` |
 | **Phase 6** | 真机测试与验收（§8） | 测试记录 / 验收报告 |
 
 ---

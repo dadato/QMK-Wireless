@@ -4,7 +4,7 @@
   通路 A｜2.4G —— 写 Dongle 复合 HID IF2 的 vendor 集合（Report ID 0，32B）
                 -> Dongle 经 2.4G -> 键盘模组 -> UART EVT_TUNNEL_USB(0x85)；
                 UART 回 CMD_TUNNEL_USB(0x18)(32B) -> 模组 -> 2.4G -> Dongle vendor IN。
-  通路 B｜BLE  —— 写键盘模组 HOGP vendor 集合（Report ID 5，32B，Usage Page 0xFF60/0x61）
+  通路 B｜BLE  —— 写键盘模组 HOGP vendor 集合（Report ID 0（隐式，描述符中无 0x85），32B，Usage Page 0xFF60/0x61）
                 -> 模组 UART EVT_TUNNEL_BLE(0x86)；
                 UART 回 CMD_TUNNEL_BLE(0x19)(32B) -> 模组 -> HOGP vendor IN Notify。
 
@@ -42,9 +42,9 @@ RX = bytes([0x01, 0x00, 0x0D]) + bytes(29)     # 键盘 -> 主机应答
 # 通路配置：HID 路径筛选子串 / Report ID / 下行事件 / 上行命令 / 展示名
 VIA_PROFILES = {
     "ble": {
-        "label": "BLE (HOGP RID5)",
+        "label": "BLE (HOGP RID0)",
         "path_hint": "00001812",
-        "rid": 5,
+        "rid": 0,
         "evt": proto.EVT_TUNNEL_BLE,
         "cmd": proto.CMD_TUNNEL_BLE,
     },

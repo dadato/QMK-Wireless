@@ -13,7 +13,7 @@
  *
  * 调用方（厂商例程文件，需按清单 2.2 接入）：
  *   sdk_ble_on_led_report()  ← hidkbdservice.c 的 Output Report(WriteAttrCB)
- *   sdk_ble_on_raw_report()  ← bridge_ble_hidsvc.c 的 VIA vendor Output Report(RID 5)
+ *   sdk_ble_on_raw_report()  ← bridge_ble_hidsvc.c 的 VIA vendor Output Report(RID 0)
  *   sdk_ble_on_host_power()  ← bridge_ble_hidsvc.c 的 HID Dev evtCB（HID Control Point）
  *   sdk_rf24_on_recv()       ← 厂商 2.4G 用例收包回调（**必须在任务上下文调用**）
  *   sdk_rf24_on_link()       ← 厂商 2.4G 用例链路状态回调
@@ -34,7 +34,7 @@ void sdk_ble_on_led_report(uint8_t led_state)
 
 void sdk_ble_on_raw_report(const uint8_t *d, uint8_t len)
 {
-    /* 主机经 BLE HID vendor 报表（RID 5，QMK Raw HID）下发的 VIA 报文
+    /* 主机经 BLE HID vendor 报表（RID 0 隐式，QMK Raw HID）下发的 VIA 报文
      * → 走 BLE 隧道上报 SK32，由 raw_hid_receive() 处理。
      * 与手机 APP 经 GATT 写 RX 的路径收敛到同一 SK32 入口。 */
     bridge_ch58x_radio_tunnel_in(BRIDGE_TUNNEL_BLE, d, (uint8_t)len);

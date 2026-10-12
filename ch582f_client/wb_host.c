@@ -76,7 +76,7 @@ static void wb_raw(uint8_t *data, uint8_t len) {
      *   2.4G / wired  -> WB_CMD_TUNNEL_USB, terminating at the Dongle's USB
      *                    raw HID endpoint.
      *   BLE (incl. the pairing window) -> WB_CMD_TUNNEL_BLE, which the module
-     *                    emits as its HOGP vendor report (RID 5, QMK Raw HID)
+     *                    emits as its HOGP vendor report (RID 0 implicit, QMK Raw HID)
      *                    so usevia.app sees the reply over WebHID. */
     uint8_t mode = wb_mode();
     if (mode == WB_MODE_BLE || mode == WB_MODE_BLE_PAIR) {

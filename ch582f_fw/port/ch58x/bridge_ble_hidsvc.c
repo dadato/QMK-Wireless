@@ -4,11 +4,17 @@
  *   Hid_AddService() / Hid_SetParameter() / Hid_GetParameter()
  *   hidReportMapLen / hidProtocolMode（hiddev.c 的两个 extern 全局）
  * 差异：
- *   1) hidReportMap 扩展为 5 张带 Report ID 的报表：
- *        RID 1 键盘输入 8B / RID 2 多媒体输入 2B /
- *        RID 3 系统控制输入 1B / RID 4 键盘 LED 输出 1B /
- *        RID 5 VIA vendor Raw HID 32B 输入 + 32B 输出
- *      （原厂商只有键盘 RID 0，且一旦引入非 0 Report ID，所有报表都必须带 ID）
+ *   1) Report Map 拆成**两个独立的 0x1812 HID 服务实例**（HOGP 允许多实例）：
+ *        实例 1 hidAttrTbl  —— 4 个顶层集合，均显式声明 Report ID：
+ *          RID 1 键盘输入 8B / RID 2 多媒体输入 2B /
+ *          RID 3 系统控制输入 1B / RID 4 键盘 LED 输出 1B
+ *        实例 2 vhidAttrTbl —— 只有 VIA vendor 一个顶层集合，**不声明 Report ID**
+ *          （隐式 RID 0），32B 输入 + 32B 输出（QMK Raw HID 0xFF60/0x61）。
+ *      之所以拆分：官方 VIA 的 WebHID 硬编码 sendReport(0, data)，需要 Report
+ *      Reference = {0, OUTPUT} 的特征；而 Windows 校验规则要求「默认报告 ID 只能
+ *      用于只含一个顶层集合且未显式声明任何 Report ID 的设备」。单份 report map
+ *      无法同时满足键盘（多 TLC + 显式 ID）与 VIA（隐式 ID 0），故拆成两个实例，
+ *      复刻 QMK USB 上「键盘接口 + Raw HID 独立接口」的结构。
  *   2) 提供本工程自己的 HID Dev 回调（bridge_ble_hidsvc_override_cbs()），
  *      屏蔽厂商 reportCB 的演示键码定时器，把 LED Output 转发给 SK32，
  *      并把 VIA vendor Output 经隧道转发给 SK32（sdk_ble_on_raw_report）。
@@ -48,13 +54,17 @@ enum {
     BRIDGE_HID_IDX_LED_OUT,
     BRIDGE_HID_IDX_BOOT_KEY_IN,
     BRIDGE_HID_IDX_BOOT_KEY_OUT,
-    BRIDGE_HID_IDX_FEATURE,
     BRIDGE_HID_IDX_RAW_IN,
     BRIDGE_HID_IDX_RAW_OUT,
     BRIDGE_HID_IDX_BATTERY
 };
 
-#define BRIDGE_HID_REPORT_CNT (BRIDGE_HID_IDX_BATTERY + 1u)
+#define BRIDGE_HID_REPORT_CNT (BRIDGE_HID_IDX_BATTERY + 1u)   /* 9 */
+
+/* 厂商 vendor 报表放在**第二个独立 HID 服务实例**（见下方 vhidAttrTbl），
+ * 该实例只有 vendor 一个顶层集合且不声明任何 Report ID 项（隐式 RID 0）。
+ * 其报表句柄仍填进同一张 hidRptMap（hiddev.c 用的是全局单表），故上面
+ * 的 RAW_IN/RAW_OUT 下标保留。 */
 
 /* ---------------- 属性表下标 ---------------- */
 enum {
@@ -88,17 +98,29 @@ enum {
     HID_BOOT_KEY_IN_IDX,
     HID_BOOT_KEY_IN_CCCD_IDX,
     HID_BOOT_KEY_OUT_DECL_IDX,
-    HID_BOOT_KEY_OUT_IDX,
-    HID_FEATURE_DECL_IDX,
-    HID_FEATURE_IDX,
-    HID_REPORT_REF_FEATURE_IDX,
-    HID_REPORT_RAW_IN_DECL_IDX,
-    HID_REPORT_RAW_IN_IDX,
-    HID_REPORT_RAW_IN_CCCD_IDX,
-    HID_REPORT_REF_RAW_IN_IDX,
-    HID_REPORT_RAW_OUT_DECL_IDX,
-    HID_REPORT_RAW_OUT_IDX,
-    HID_REPORT_REF_RAW_OUT_IDX
+    HID_BOOT_KEY_OUT_IDX
+};
+
+/* ---------------- vendor 第二 HID 服务属性表下标 ----------------
+ * 单顶层集合、隐式 RID 0 的独立 0x1812 实例，供官方 VIA 直连
+ * （WebHID 硬编码 sendReport(0, data) 需要 ID=0 的 Output 特征）。 */
+enum {
+    VHID_SERVICE_IDX,
+    VHID_INFO_DECL_IDX,
+    VHID_INFO_IDX,
+    VHID_CONTROL_POINT_DECL_IDX,
+    VHID_CONTROL_POINT_IDX,
+    VHID_PROTOCOL_MODE_DECL_IDX,
+    VHID_PROTOCOL_MODE_IDX,
+    VHID_REPORT_MAP_DECL_IDX,
+    VHID_REPORT_MAP_IDX,
+    VHID_REPORT_IN_DECL_IDX,
+    VHID_REPORT_IN_IDX,
+    VHID_REPORT_IN_CCCD_IDX,
+    VHID_REPORT_REF_IN_IDX,
+    VHID_REPORT_OUT_DECL_IDX,
+    VHID_REPORT_OUT_IDX,
+    VHID_REPORT_REF_OUT_IDX
 };
 
 /* ---------------- UUID ---------------- */
@@ -194,32 +216,38 @@ static const uint8_t hidReportMap[] = {
     0x95, 0x05,        /*   Report Count (5) */
     0x75, 0x01,        /*   Report Size (1) */
     0x81, 0x01,        /*   Input (Const)：补齐 1 字节 */
-    0xC0,              /* End Collection */
+    0xC0               /* End Collection */
+};
 
-    /* ---- VIA vendor：RID 5，32B 输入 + 32B 输出（QMK Raw HID） ----
-     * 与 Dongle 侧 USB Raw HID 描述符（bridge_usb_ch58x.c 的 s_raw_report）
-     * 保持一致（Usage Page 0xFF60 / Usage 0x61 / 32B IN + 32B OUT），
-     * 使 usevia.app 经 WebHID 连接 BLE HID 设备时能识别出同一套 raw HID 端点。 */
+uint16_t hidReportMapLen = sizeof(hidReportMap);
+
+/* ---- 第二个 HID 服务实例的 Report Map：仅 VIA vendor 一个顶层集合 ----
+ * 与 Dongle 侧 USB Raw HID 描述符（bridge_usb_ch58x.c 的 s_raw_report）一致
+ * （Usage Page 0xFF60 / Usage 0x61 / 32B IN + 32B OUT）。
+ * **关键**：此实例只有 vendor 一个顶层集合，且**不声明任何 Report ID 项**
+ * （无 0x85），故 Report ID 隐式为 0。官方 VIA 的 WebHID 硬编码
+ * sendReport(0, data)，只有该实例的 Report Reference = {0, OUTPUT} 才能命中。
+ * 注意：本 map 长度与 hidReportMap 不同，而 SDK HidDev_ReadAttrCB 读 REPORT_MAP
+ * 时用全局 hidReportMapLen，故第二服务必须用自定义读回调（bridge_vhid_read_cb）
+ * 覆写 REPORT_MAP 分支，其余分支委派 HidDev_ReadAttrCB。 */
+static const uint8_t vendorHidReportMap[] = {
     0x06, 0x60, 0xFF,  /* Usage Page (Vendor Defined 0xFF60) */
     0x09, 0x61,        /* Usage (0x61) */
     0xA1, 0x01,        /* Collection (Application) */
-    0x85, BRIDGE_HID_RID_RAW,  /*   Report ID (5) */
     0x09, 0x62,        /*   Usage (0x62) */
     0x15, 0x00,        /*   Logical Min (0) */
     0x26, 0xFF, 0x00,  /*   Logical Max (255) */
     0x75, 0x08,        /*   Report Size (8) */
     0x95, 0x20,        /*   Report Count (32) */
-    0x81, 0x02,        /*   Input (Data,Var,Abs) */
+    0x81, 0x02,        /*   Input (Data,Var,Abs)：模组 → 主机 */
     0x09, 0x63,        /*   Usage (0x63) */
     0x15, 0x00,        /*   Logical Min (0) */
     0x26, 0xFF, 0x00,  /*   Logical Max (255) */
     0x75, 0x08,        /*   Report Size (8) */
     0x95, 0x20,        /*   Report Count (32) */
-    0x91, 0x02,        /*   Output (Data,Var,Abs) */
+    0x91, 0x02,        /*   Output (Data,Var,Abs)：主机 → 模组 */
     0xC0               /* End Collection */
 };
-
-uint16_t hidReportMapLen = sizeof(hidReportMap);
 
 /* hiddev.c 通过 extern 读写（协议模式切换、断链复位） */
 uint8_t hidProtocolMode = HID_PROTOCOL_MODE_REPORT;
@@ -273,20 +301,14 @@ static gattCharCfg_t hidReportBootKeyInClientCharCfg[GATT_MAX_NUM_CONN];
 static uint8_t hidReportBootKeyOutProps = GATT_PROP_READ | GATT_PROP_WRITE | GATT_PROP_WRITE_NO_RSP;
 static uint8_t hidReportBootKeyOut;
 
-/* Feature（厂商保留，id 0） */
-static uint8_t hidReportFeatureProps = GATT_PROP_READ | GATT_PROP_WRITE;
-static uint8_t hidReportFeature;
-static uint8_t hidReportRefFeature[HID_REPORT_REF_LEN] =
-    {0, HID_REPORT_TYPE_FEATURE};
-
-/* VIA vendor 输入（RID 5，32B，QMK Raw HID：模组 → 主机） */
+/* VIA vendor 输入（第二服务实例，隐式 RID 0，32B，QMK Raw HID：模组 → 主机） */
 static uint8_t       hidReportRawInProps = GATT_PROP_READ | GATT_PROP_NOTIFY;
 static uint8_t       hidReportRawIn[BRIDGE_HID_RAW_REPORT_LEN];
 static gattCharCfg_t hidReportRawInClientCharCfg[GATT_MAX_NUM_CONN];
 static uint8_t hidReportRefRawIn[HID_REPORT_REF_LEN] =
     {BRIDGE_HID_RID_RAW, HID_REPORT_TYPE_INPUT};
 
-/* VIA vendor 输出（RID 5，32B，QMK Raw HID：主机 → 模组） */
+/* VIA vendor 输出（第二服务实例，隐式 RID 0，32B，QMK Raw HID：主机 → 模组） */
 static uint8_t hidReportRawOutProps = GATT_PROP_READ | GATT_PROP_WRITE | GATT_PROP_WRITE_NO_RSP;
 static uint8_t hidReportRawOut[BRIDGE_HID_RAW_REPORT_LEN];
 static uint8_t hidReportRefRawOut[HID_REPORT_REF_LEN] =
@@ -345,18 +367,41 @@ static gattAttribute_t hidAttrTbl[] = {
     {{ATT_BT_UUID_SIZE, characterUUID}, GATT_PERMIT_READ, 0, &hidReportBootKeyOutProps},
     {{ATT_BT_UUID_SIZE, hidBootKeyOutputUUID},
      GATT_PERMIT_ENCRYPT_READ | GATT_PERMIT_ENCRYPT_WRITE, 0, &hidReportBootKeyOut},
-    /* Feature */
-    {{ATT_BT_UUID_SIZE, characterUUID}, GATT_PERMIT_READ, 0, &hidReportFeatureProps},
-    {{ATT_BT_UUID_SIZE, hidReportUUID},
-     GATT_PERMIT_ENCRYPT_READ | GATT_PERMIT_ENCRYPT_WRITE, 0, &hidReportFeature},
-    {{ATT_BT_UUID_SIZE, reportRefUUID}, GATT_PERMIT_READ, 0, hidReportRefFeature},
-    /* VIA vendor 输入（RID 5，32B） */
+};
+
+/* ---- vendor 第二 HID 服务实例（单顶层集合、隐式 RID 0，供官方 VIA 直连） ----
+ * 值定义复用主服务的 hidInfo / hidInfoProps / hidReportMapProps；协议模式指向同一
+ * 全局 hidProtocolMode（hiddev.c 的报表查找按全局 mode 过滤，且保持两服务一致）。 */
+static const gattAttrType_t vhidService = {ATT_BT_UUID_SIZE, hidServUUID};
+
+static uint8_t vhidControlPointProps = GATT_PROP_WRITE_NO_RSP;
+static uint8_t vhidControlPoint;
+static uint8_t vhidProtocolModeProps = GATT_PROP_READ | GATT_PROP_WRITE_NO_RSP;
+
+static gattAttribute_t vhidAttrTbl[] = {
+    /* HID Service */
+    {{ATT_BT_UUID_SIZE, primaryServiceUUID}, GATT_PERMIT_READ, 0, (uint8_t *)&vhidService},
+    /* HID Information */
+    {{ATT_BT_UUID_SIZE, characterUUID}, GATT_PERMIT_READ, 0, &hidInfoProps},
+    {{ATT_BT_UUID_SIZE, hidInfoUUID}, GATT_PERMIT_ENCRYPT_READ, 0, (uint8_t *)hidInfo},
+    /* HID Control Point */
+    {{ATT_BT_UUID_SIZE, characterUUID}, GATT_PERMIT_READ, 0, &vhidControlPointProps},
+    {{ATT_BT_UUID_SIZE, hidControlPointUUID}, GATT_PERMIT_ENCRYPT_WRITE, 0, &vhidControlPoint},
+    /* HID Protocol Mode */
+    {{ATT_BT_UUID_SIZE, characterUUID}, GATT_PERMIT_READ, 0, &vhidProtocolModeProps},
+    {{ATT_BT_UUID_SIZE, hidProtocolModeUUID},
+     GATT_PERMIT_ENCRYPT_READ | GATT_PERMIT_ENCRYPT_WRITE, 0, &hidProtocolMode},
+    /* HID Report Map（本实例专属，单 TLC 32B Raw HID） */
+    {{ATT_BT_UUID_SIZE, characterUUID}, GATT_PERMIT_READ, 0, &hidReportMapProps},
+    {{ATT_BT_UUID_SIZE, hidReportMapUUID}, GATT_PERMIT_ENCRYPT_READ, 0,
+     (uint8_t *)vendorHidReportMap},
+    /* VIA vendor 输入（隐式 RID 0，32B） */
     {{ATT_BT_UUID_SIZE, characterUUID}, GATT_PERMIT_READ, 0, &hidReportRawInProps},
     {{ATT_BT_UUID_SIZE, hidReportUUID}, GATT_PERMIT_ENCRYPT_READ, 0, hidReportRawIn},
     {{ATT_BT_UUID_SIZE, clientCharCfgUUID},
      GATT_PERMIT_READ | GATT_PERMIT_ENCRYPT_WRITE, 0, (uint8_t *)&hidReportRawInClientCharCfg},
     {{ATT_BT_UUID_SIZE, reportRefUUID}, GATT_PERMIT_READ, 0, hidReportRefRawIn},
-    /* VIA vendor 输出（RID 5，32B） */
+    /* VIA vendor 输出（隐式 RID 0，32B） */
     {{ATT_BT_UUID_SIZE, characterUUID}, GATT_PERMIT_READ, 0, &hidReportRawOutProps},
     {{ATT_BT_UUID_SIZE, hidReportUUID},
      GATT_PERMIT_ENCRYPT_READ | GATT_PERMIT_ENCRYPT_WRITE, 0, hidReportRawOut},
@@ -367,6 +412,29 @@ static gattAttribute_t hidAttrTbl[] = {
 static hidRptMap_t hidRptMap[BRIDGE_HID_REPORT_CNT];
 
 static gattServiceCBs_t s_gatt_cbs = {HidDev_ReadAttrCB, HidDev_WriteAttrCB, NULL};
+
+/* vendor 第二服务读回调：只有 Report Map 需要本实例专属长度（SDK 的
+ * HidDev_ReadAttrCB 在 REPORT_MAP 分支用全局 hidReportMapLen，会错读主服务长度），
+ * 其余分支（HID Information / Report / Report Reference / Protocol Mode）委派给
+ * SDK 实现。写回调直接用 HidDev_WriteAttrCB（按 handle 查 hidRptMap，天然复用）。 */
+static bStatus_t bridge_vhid_read_cb(uint16_t connHandle, gattAttribute_t *pAttr,
+                                     uint8_t *pValue, uint16_t *pLen, uint16_t offset,
+                                     uint16_t maxLen, uint8_t method)
+{
+    uint16_t uuid = BUILD_UINT16(pAttr->type.uuid[0], pAttr->type.uuid[1]);
+
+    if (uuid == REPORT_MAP_UUID) {
+        if (offset >= (uint16_t)sizeof(vendorHidReportMap)) {
+            return ATT_ERR_INVALID_OFFSET;
+        }
+        *pLen = MIN(maxLen, (uint16_t)(sizeof(vendorHidReportMap) - offset));
+        tmos_memcpy(pValue, pAttr->pValue + offset, *pLen);
+        return SUCCESS;
+    }
+    return HidDev_ReadAttrCB(connHandle, pAttr, pValue, pLen, offset, maxLen, method);
+}
+
+static gattServiceCBs_t s_vhid_gatt_cbs = {bridge_vhid_read_cb, HidDev_WriteAttrCB, NULL};
 
 /* ---------------- 本工程 HID Dev 回调 ---------------- */
 
@@ -560,6 +628,15 @@ bStatus_t Hid_AddService(void)
                                          GATT_MAX_ENCRYPT_KEY_SIZE, &s_gatt_cbs);
     s_hid_add_status = (uint8_t)status;
 
+    /* 注册 vendor 第二 HID 服务实例（结果并入同一诊断字节，第二位非 0 表示失败） */
+    {
+        bStatus_t vstatus = GATTServApp_RegisterService(vhidAttrTbl, GATT_NUM_ATTRS(vhidAttrTbl),
+                                                        GATT_MAX_ENCRYPT_KEY_SIZE, &s_vhid_gatt_cbs);
+        if (vstatus != SUCCESS) {
+            s_hid_add_status = (uint8_t)(status | 0x80u);
+        }
+    }
+
     Batt_GetParameter(BATT_PARAM_SERVICE_HANDLE,
                       &GATT_INCLUDED_HANDLE(hidAttrTbl, HID_INCLUDED_SERVICE_IDX));
 
@@ -599,21 +676,15 @@ bStatus_t Hid_AddService(void)
     hidRptMap[BRIDGE_HID_IDX_BOOT_KEY_OUT].cccdHandle = 0;
     hidRptMap[BRIDGE_HID_IDX_BOOT_KEY_OUT].mode      = HID_PROTOCOL_MODE_BOOT;
 
-    hidRptMap[BRIDGE_HID_IDX_FEATURE].id        = hidReportRefFeature[0];
-    hidRptMap[BRIDGE_HID_IDX_FEATURE].type      = hidReportRefFeature[1];
-    hidRptMap[BRIDGE_HID_IDX_FEATURE].handle    = hidAttrTbl[HID_FEATURE_IDX].handle;
-    hidRptMap[BRIDGE_HID_IDX_FEATURE].cccdHandle = 0;
-    hidRptMap[BRIDGE_HID_IDX_FEATURE].mode      = HID_PROTOCOL_MODE_REPORT;
-
     hidRptMap[BRIDGE_HID_IDX_RAW_IN].id        = hidReportRefRawIn[0];
     hidRptMap[BRIDGE_HID_IDX_RAW_IN].type      = hidReportRefRawIn[1];
-    hidRptMap[BRIDGE_HID_IDX_RAW_IN].handle    = hidAttrTbl[HID_REPORT_RAW_IN_IDX].handle;
-    hidRptMap[BRIDGE_HID_IDX_RAW_IN].cccdHandle = hidAttrTbl[HID_REPORT_RAW_IN_CCCD_IDX].handle;
+    hidRptMap[BRIDGE_HID_IDX_RAW_IN].handle    = vhidAttrTbl[VHID_REPORT_IN_IDX].handle;
+    hidRptMap[BRIDGE_HID_IDX_RAW_IN].cccdHandle = vhidAttrTbl[VHID_REPORT_IN_CCCD_IDX].handle;
     hidRptMap[BRIDGE_HID_IDX_RAW_IN].mode      = HID_PROTOCOL_MODE_REPORT;
 
     hidRptMap[BRIDGE_HID_IDX_RAW_OUT].id        = hidReportRefRawOut[0];
     hidRptMap[BRIDGE_HID_IDX_RAW_OUT].type      = hidReportRefRawOut[1];
-    hidRptMap[BRIDGE_HID_IDX_RAW_OUT].handle    = hidAttrTbl[HID_REPORT_RAW_OUT_IDX].handle;
+    hidRptMap[BRIDGE_HID_IDX_RAW_OUT].handle    = vhidAttrTbl[VHID_REPORT_OUT_IDX].handle;
     hidRptMap[BRIDGE_HID_IDX_RAW_OUT].cccdHandle = 0;
     hidRptMap[BRIDGE_HID_IDX_RAW_OUT].mode      = HID_PROTOCOL_MODE_REPORT;
 
@@ -626,11 +697,11 @@ bStatus_t Hid_AddService(void)
 /* HID 服务注册取证（CMD_HID_DIAG 0x2B，仅排障用）：
  *   out[0]    = s_hid_add_status（GATTServApp_RegisterService 返回值；0xFF=未调用）
  *   out[1..2] = HID 服务首属性 handle（LE；非 0 表示 GATT_RegisterService 已分配句柄）
- *   out[3..4] = Report Map 属性 handle（LE）
- *   out[5..6] = VIA vendor 输入(RID5 IN) 属性 handle（LE）
- *   out[7..8] = VIA vendor 输出(RID5 OUT) 属性 handle（LE）
+ *   out[3..4] = Report Map 属性 handle（主服务，LE）
+ *   out[5..6] = VIA vendor 输入(RID0 IN) 属性 handle（第二服务，LE）
+ *   out[7..8] = VIA vendor 输出(RID0 OUT) 属性 handle（第二服务，LE）
  *   out[9]    = 报表条数（BRIDGE_HID_REPORT_CNT，应为 9）
- *   out[10]   = 属性表项数（GATT_NUM_ATTRS(hidAttrTbl)，应为 41）
+ *   out[10]   = 两张属性表项数之和（应为 47 = 31 + 16）
  *   out[11]   = 上次复位源（R8_RESET_STATUS & 0x07，见 sdk_last_reset_cause）
  *   out[12]   = 复位前最后阶段面包屑（bridge_dbg_stage_prev，见 bridge_port_ch58x.c）
  *   out[13]   = 当前阶段面包屑（bridge_dbg_stage_now）
@@ -655,12 +726,12 @@ int port_hid_diag(uint8_t *out, uint8_t *out_len)
     out[2] = (uint8_t)(hidAttrTbl[HID_SERVICE_IDX].handle >> 8);
     out[3] = (uint8_t)(hidAttrTbl[HID_REPORT_MAP_IDX].handle & 0xFFu);
     out[4] = (uint8_t)(hidAttrTbl[HID_REPORT_MAP_IDX].handle >> 8);
-    out[5] = (uint8_t)(hidAttrTbl[HID_REPORT_RAW_IN_IDX].handle & 0xFFu);
-    out[6] = (uint8_t)(hidAttrTbl[HID_REPORT_RAW_IN_IDX].handle >> 8);
-    out[7] = (uint8_t)(hidAttrTbl[HID_REPORT_RAW_OUT_IDX].handle & 0xFFu);
-    out[8] = (uint8_t)(hidAttrTbl[HID_REPORT_RAW_OUT_IDX].handle >> 8);
+    out[5] = (uint8_t)(vhidAttrTbl[VHID_REPORT_IN_IDX].handle & 0xFFu);
+    out[6] = (uint8_t)(vhidAttrTbl[VHID_REPORT_IN_IDX].handle >> 8);
+    out[7] = (uint8_t)(vhidAttrTbl[VHID_REPORT_OUT_IDX].handle & 0xFFu);
+    out[8] = (uint8_t)(vhidAttrTbl[VHID_REPORT_OUT_IDX].handle >> 8);
     out[9] = (uint8_t)BRIDGE_HID_REPORT_CNT;
-    out[10] = (uint8_t)GATT_NUM_ATTRS(hidAttrTbl);
+    out[10] = (uint8_t)(GATT_NUM_ATTRS(hidAttrTbl) + GATT_NUM_ATTRS(vhidAttrTbl));
     out[11] = sdk_last_reset_cause();
     out[12] = bridge_dbg_stage_prev();
     out[13] = bridge_dbg_stage_now();
@@ -706,12 +777,6 @@ uint8_t Hid_SetParameter(uint8_t id, uint8_t type, uint16_t uuid, uint8_t len, v
                 } else {
                     ret = ATT_ERR_INVALID_VALUE_SIZE;
                 }
-            } else if (type == HID_REPORT_TYPE_FEATURE) {
-                if (len == 1u) {
-                    hidReportFeature = *((uint8_t *)pValue);
-                } else {
-                    ret = ATT_ERR_INVALID_VALUE_SIZE;
-                }
             } else {
                 ret = ATT_ERR_ATTR_NOT_FOUND;
             }
@@ -744,9 +809,6 @@ uint8_t Hid_GetParameter(uint8_t id, uint8_t type, uint16_t uuid, uint16_t *pLen
                     *((uint8_t *)pValue) = hidReportLedOut;
                     *pLen = 1u;
                 }
-            } else if (type == HID_REPORT_TYPE_FEATURE) {
-                *((uint8_t *)pValue) = hidReportFeature;
-                *pLen = 1u;
             } else {
                 *pLen = 0u;
             }

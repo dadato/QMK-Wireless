@@ -347,7 +347,7 @@ static uint16_t s_tunnel_drop = 0u;
  * QMK raw-HID handler.  VIA's reply is emitted with raw_hid_send(), which the
  * wireless host driver (wb_raw) routes back over the same tunnel.  Both
  * wireless paths carry this: 2.4G terminates at the Dongle's USB raw HID
- * endpoint, and BLE rides the module's HOGP vendor report (RID 5, QMK Raw HID)
+ * endpoint, and BLE rides the module's HOGP vendor report (RID 0 implicit, QMK Raw HID)
  * layout for usevia.app over WebHID. */
 static void handle_evt_tunnel(const wb_frame_t *f) {
     /* VIA reports are always RAW_EPSIZE (== 32) bytes; anything else would

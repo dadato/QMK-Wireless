@@ -2,7 +2,7 @@
  *
  * 数据流（与 VIA 测试 Tab 的「通路 A/B」方向相反）：
  *   桌面 VIA(usevia.app)
- *     → 蓝牙(HOGP vendor RID5) 或 2.4G(Dongle RID0)
+ *     → 蓝牙(HOGP vendor RID0) 或 2.4G(Dongle RID0)
  *     → CH582F 模组
  *     → UART 桥帧 EVT_TUNNEL_BLE(0x86) / EVT_TUNNEL_USB(0x85)  [载荷 = 32B VIA Raw HID 请求]
  *     → PC COM (WebSerial，debug_web 连接)

@@ -944,14 +944,14 @@ static void test_callback_translation(void)
 /* ---------------- VIA over BLE（HOGP vendor 报表）用例 ---------------- */
 
 /* VIA 走 BLE 的双向通路：
- *   入站  主机 write HID vendor Output(RID 5, 32B) → sdk_ble_on_raw_report
+ *   入站  主机 write HID vendor Output(RID 0 隐式, 32B) → sdk_ble_on_raw_report
  *         → EVT_TUNNEL_BLE 上报 SK32（raw_hid_receive）
  *   出站  SK32 raw_hid_send → CMD_TUNNEL_BLE → port_tunnel_send(BLE)
- *         → HOGP vendor Input(RID 5) notify，usevia.app 经 WebHID 收包
+ *         → HOGP vendor Input(RID 0 隐式) notify，usevia.app 经 WebHID 收包
  */
 static void test_tunnel_via_ble(void)
 {
-    CASE("VIA 透传：BLE 出站走 HID vendor 报表(RID 5) / 入站翻译为 EVT_TUNNEL_BLE");
+    CASE("VIA 透传：BLE 出站走 HID vendor 报表(RID 0) / 入站翻译为 EVT_TUNNEL_BLE");
 
     radio_baseline();
 
@@ -983,7 +983,7 @@ static void test_tunnel_via_ble(void)
         uint8_t len = 0u;
         uint8_t raw[BRIDGE_HID_RAW_REPORT_LEN];
 
-        /* 出站：BLE → HOGP vendor 报表（RID 5，32B Input） */
+        /* 出站：BLE → HOGP vendor 报表（RID 0 隐式，32B Input） */
         CHECK_EQ(port_radio_init(BRIDGE_RADIO_BLE), BRIDGE_OK);
         stub_ble_set_connected(true);
 
@@ -1016,7 +1016,7 @@ static void test_tunnel_via_ble(void)
         CHECK_EQ(port_tunnel_send(BRIDGE_TUNNEL_BLE, 0, 4u), BRIDGE_ERR_PARAM);
         CHECK_EQ(port_tunnel_send(BRIDGE_TUNNEL_BLE, raw, 0u), BRIDGE_ERR_PARAM);
 
-        /* 入站：主机 write vendor Output(RID 5) → EVT_TUNNEL_BLE 上报 SK32 */
+        /* 入站：主机 write vendor Output(RID 0) → EVT_TUNNEL_BLE 上报 SK32 */
         stub_advance_ms(50u);
         stub_u1_tx_reset();
         {

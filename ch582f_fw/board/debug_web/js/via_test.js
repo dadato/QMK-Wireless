@@ -39,7 +39,9 @@
   var HID_VID_BLE    = 0x0194;
   var HID_PID_BLE    = 0x0464;
 
-  /* Dongle IF2 Raw HID 无 Report ID；键盘模组 BLE HOGP vendor 报表为 ID 5 */
+  /* Dongle IF2 Raw HID 为 Report ID 0（隐式，独立接口，USB 下合法）；键盘模组 BLE
+   * HOGP vendor 报表为显式 Report ID 5——与键盘 RID1/多媒体 RID2/系统 RID3 同属一份
+   * 复合 report map，Windows 要求显式 ID 全覆盖，不能使用隐式 RID 0（会导致 Code 10）。 */
   var HID_RID_DONGLE = 0;
   var BLE_RID_RAW    = 5;
 
@@ -408,12 +410,12 @@
     return { rx: rx, parsed: parseOtaGetInfo(rx) };
   };
 
-  /* ---------------- 通路 B：WebHID → 键盘模组 BLE（HOGP vendor RID 5） ----------------
+  /* ---------------- 通路 B：WebHID → 键盘模组 BLE（HOGP vendor RID 0） ----------------
    * 键盘模组对 BLE 主机提供 HOGP：键盘/多媒体/系统/LED 之外，另有一组 QMK Raw HID
-   * vendor 集合（Usage Page 0xFF60 / Usage 0x61，Report ID 5，32B IN+OUT）。其 OUT
+   * vendor 集合（Usage Page 0xFF60 / Usage 0x61，Report ID 0 隐式，32B IN+OUT）。其 OUT
    * 写入被模组转发为 UART EVT_TUNNEL_BLE(0x86) → SK32 raw_hid_receive；SK32 的
    * raw_hid_send 经 br_raw() 走 CMD_TUNNEL_BLE(0x19) 回模组，由 vendor IN notify 送出。
-   * 故通路 B 与通路 A 同为 WebHID，Report ID 不同（0 vs 5）；又因两条通路上报相同
+   * 故通路 B 与通路 A 同为 WebHID 且 Report ID 相同（均 0）；又因两条通路上报相同
    * VID/PID，另以「是否含键盘顶层集合」区分（BLE=true / Dongle=false）。 */
 
   function ViaBle(opts) {

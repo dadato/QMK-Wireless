@@ -354,7 +354,7 @@ int port_tunnel_send(uint8_t kind, const uint8_t *payload, uint8_t len)
     return sdk_usb_tunnel_send(payload, len);
 #else
     if (kind == BRIDGE_TUNNEL_BLE) {
-        /* VIA over BLE：出站必须走 HOGP vendor 报表（RID 5，32B Input），
+        /* VIA over BLE：出站必须走 HOGP vendor 报表（RID 0 隐式，32B Input），
          * 主机侧 usevia.app 经 WebHID 才能收到 raw HID 回包。
          * 手机 APP 的 GATT 透传 notify 出站通道不再使用（其 RX 写通道
          * 0xFFF2 仍保留，用于把主机报文上报 SK32）。 */

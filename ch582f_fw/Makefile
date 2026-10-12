@@ -154,8 +154,8 @@ CDEFS   += -DHAL_SLEEP=TRUE
 endif
 # BLE 数据面缓冲长度：SDK HAL/MCU.c 用它填 cfg.BufMaxLen，而 ATT_MTU = BufMaxLen - 4。
 # SDK 默认 27 → ATT_MTU=23 → 单次 notify 上限 MTU-3=20B，无法承载 VIA Raw HID 的
-# RID5 32B 报表（HidDev_sendNoti→GATT_Notification 因超长失败）。128 → ATT_MTU=124，
-# 既满足 RID5 32B，也给 GATT 透传服务留足余量。用命令行宏覆盖，不动 SDK submodule。
+# RID0 32B 报表（HidDev_sendNoti→GATT_Notification 因超长失败）。128 → ATT_MTU=124，
+# 既满足 RID0 32B，也给 GATT 透传服务留足余量。用命令行宏覆盖，不动 SDK submodule。
 CDEFS   += -DBLE_BUFF_MAX_LEN=128
 ifeq ($(LOG),0)
 CDEFS   += -DBRIDGE_BOARD_LOG_ENABLE=0
