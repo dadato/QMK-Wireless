@@ -137,9 +137,10 @@
   };
 
   /* ---------------- 电源与其他 ---------------- */
-  Commands.prototype.setBattery = async function (percent) {
-    var fr = await this.link.request(F.CMD.SET_BATTERY, Uint8Array.of(percent & 0xFF));
-    return { frame: fr, text: '已注入电量 ' + percent + '%（随后 EVT_STATE）' };
+  Commands.prototype.setBattery = async function (percent, charging) {
+    var flags = charging ? 0x01 : 0x00; /* BRIDGE_BATT_FLAG_CHARGING */
+    var fr = await this.link.request(F.CMD.SET_BATTERY, Uint8Array.of(percent & 0xFF, flags));
+    return { frame: fr, text: '已注入电量 ' + percent + '%' + (charging ? '（充电中）' : '') + '（随后 EVT_STATE）' };
   };
   Commands.prototype.sleep = async function (level) {
     var fr = await this.link.request(F.CMD.SLEEP, Uint8Array.of(level & 0xFF));
@@ -408,10 +409,11 @@
     {
       name: '电源与其他', items: [
         { id: 'set_battery', label: 'SET_BATTERY', cmd: F.CMD.SET_BATTERY,
-          desc: '外部上报电量百分比（先回 ACK，再下发 EVT_STATE）。\n请求：[percent]（1B）。\npercent 取值：0x00..0x64 = 0..100%；>0x64 截断为 100%。\n现象：仅 battery_src=EXTERNAL 时优先于本地 ADC；低电告警 LOW ≤20% / CRIT ≤5%。\n边界：len<1 → PARAM。',
+          desc: '外部上报电量百分比与充电状态（先回 ACK，再下发 EVT_STATE）。\n请求：[percent u8][flags u8]（flags 可选，旧版单字节仍接受）。\npercent 取值：0x00..0x64 = 0..100%；>0x64 截断为 100%。\nflags 取值：bit0 = 充电中（1=充电，0=未充电），其余位保留 0。\n现象：仅 battery_src=EXTERNAL/AUTO 时优先于本地 ADC；低电告警 LOW ≤20% / CRIT ≤5%。\n边界：len<1 → PARAM。',
           fields: [
-          { key: 'percent', label: '电量% (0..100)', type: 'number', def: '66', min: 0, max: 100 }
-        ], run: function (c, v) { return c.setBattery(parseInt(v.percent, 10)); } },
+          { key: 'percent', label: '电量% (0..100)', type: 'number', def: '66', min: 0, max: 100 },
+          { key: 'charging', label: '充电中', type: 'select', def: '0', options: [['0', '0 = 未充电'], ['1', '1 = 充电中']] }
+        ], run: function (c, v) { return c.setBattery(parseInt(v.percent, 10), v.charging === '1'); } },
         { id: 'sleep', label: 'SLEEP', cmd: F.CMD.SLEEP,
           desc: '睡眠控制 / 唤醒。\n请求：[level]（0~1B，缺省 1=IDLE）。\nlevel 取值：\n  0 = WAKE（解除睡眠许可，切回 last_mode；上次为 SLEEP/OTA 则改 BLE）\n  1 = IDLE（浅睡，保持链路；缺省）\n  2 = DEEP（进 MODE_SLEEP）\n  >2 → PARAM\n边界：>2 → PARAM。',
           fields: [

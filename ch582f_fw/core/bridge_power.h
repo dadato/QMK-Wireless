@@ -21,10 +21,13 @@ uint8_t  bridge_power_alarm_flags(void);
 
 bool     bridge_power_charger_active(void);
 void     bridge_power_note_charger(bool active);
+/* 当前有效充电状态打包为载荷 flags（BRIDGE_BATT_FLAG_*；无标志时 0）。 */
+uint8_t  bridge_power_batt_flags(void);
 
 /* 主控下发电量（借鉴市售模组 0x87「下发电量信息」）：
- * SK32 自算电量优先于本地 ADC 换算，取值为 0..100（>100 截断）。 */
-void     bridge_power_set_external(uint8_t percent);
+ * SK32 自算电量优先于本地 ADC 换算，取值为 0..100（>100 截断）；
+ * charging 为该次上报的充电状态（CHARGING 标志位）。 */
+void     bridge_power_set_external(uint8_t percent, bool charging);
 bool     bridge_power_has_external(void);
 
 /* 电压 → 电量百分比（锂电曲线，可标定） */

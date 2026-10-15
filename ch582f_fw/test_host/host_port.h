@@ -46,8 +46,12 @@ void     host_radio_fail_next(bool fail);
 host_radio_pkt_t *host_radio_last(void);
 uint32_t host_radio_unpair_count(uint8_t mode);   /* mode = BRIDGE_RADIO_* */
 void     host_radio_unpair_reset(void);
+uint32_t host_radio_pair_start_count(uint8_t mode); /* mode = BRIDGE_RADIO_* */
+void     host_radio_pair_start_reset(void);
 uint32_t host_radio_pair_stop_count(uint8_t mode); /* mode = BRIDGE_RADIO_* */
 void     host_radio_pair_stop_reset(void);
+uint32_t host_radio_adv_resume_count(uint8_t mode); /* mode = BRIDGE_RADIO_* */
+void     host_radio_adv_resume_reset(void);
 
 /* ---- 透传通道（port_tunnel_send 抓包） ---- */
 extern uint8_t  g_host_tunnel[HOST_TUNNEL_BUF];

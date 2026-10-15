@@ -116,12 +116,16 @@ static int mode_transaction(bridge_mode_t target, bool persist)
             return BRIDGE_ERR_IO;
         }
         s_radio_up = true;
-        /* 广播/可配对只在显式配对窗口存在：常规无线模式（BLE/2.4G）永不广播，
-         * 使已配对设备掉线（主机关闭蓝牙 / Dongle 关闭）后模块不再回到可配对状态。
-         * BLE 常规模式所用槽地址已由 GAPROLE_STARTED(sdk_ble_gap_ready) 应用，
-         * 无需再借 connect_profile 重开广播。 */
+        /* 广播策略（可连接性按业务态区分，详见 sdk 层广播策略注释）：
+         * - 配对窗口：可发现广播（BLE）/ 配对帧周期重发（2.4G），新主机可见；
+         * - BLE 常规：**待连** = 可连接不可发现广播——BLE 外设只有处于可连接
+         *   广播态 central 才发得起连接，已配对主机凭 bond 掉线后直接重连，
+         *   新主机扫不到（设备列表仅配对窗口可见）；
+         * - 2.4G 常规：RX 射频常开，由心跳 / link_id 在对端恢复时自动重连。 */
         if (mode_is_paired_window(target)) {
             (void)port_radio_pair_start(radio);
+        } else if (target == MODE_BLE) {
+            (void)port_radio_adv_resume(radio);
         }
     }
 
@@ -313,24 +317,26 @@ void bridge_mode_on_radio_event(uint8_t evt)
                 s_mode = MODE_2G4;
                 (void)bridge_cfg_set_mode((uint8_t)MODE_2G4);
             }
-            /* 已连接即撤下广播/配对意图：否则链路随后中断时协议栈会在 GAPROLE_WAITING
-             * 自动重开广播，令已配对设备掉线瞬间又进入可配对状态。 */
-            (void)port_radio_pair_stop(radio_of(s_mode));
+            /* 已连接不主动撤广播：BLE 连接建立即由协议栈自动停广播（无需写参数）；
+             * 2.4G 配对帧周期重发由 rf24pair_is_bound() 门控自停（绑定成功后不再
+             * 重发，RX 不受影响）。 */
             break;
 
         case BRIDGE_RADIO_EVT_DISCONNECTED:
             bridge_hid_release_all();
             s_connected = false;
             bridge_hid_note_link(false);
-            /* 已配对后掉线（主机关闭蓝牙 / Dongle 关闭等）：保持当前常规模式、射频静默，
-             * 绝不重开广播或重入配对窗口——广播/可配对只在显式配对窗口存在（PAIR_START）。
-             * 2.4G 由心跳/link_id 校验在对端恢复时自动重连；BLE 需重新 PAIR_START 重连。 */
-            if (!mode_is_paired_window(s_mode)) {
-                uint8_t r = radio_of(s_mode);
-                if (r != BRIDGE_RADIO_NONE) {
-                    (void)port_radio_pair_stop(r);
-                }
+            if (mode_is_paired_window(s_mode)) {
+                /* 配对窗口内连接失败/被取消（bond 未成）：维持窗口，重新开广播 /
+                 * 重启配对帧，直至超时。 */
+                (void)port_radio_pair_start(radio_of(s_mode));
+                pair_window_stamp();
+                break;
             }
+            /* 常规模式掉线（主机关闭蓝牙 / Dongle 关闭等）：保持当前常规模式，
+             * 协议栈在 GAPROLE_WAITING 显式撤广播（广播只属配对窗口）——不做射频
+             * 静默，已配对主机（Windows 记忆 bond）直接重连，无需 PAIR_START；
+             * 2.4G RX 常开，对端恢复经心跳/link_id 自动重连。 */
             break;
 
         case BRIDGE_RADIO_EVT_PAIRED:
@@ -454,6 +460,7 @@ void bridge_mode_poll(void)
      * （BLE_PAIR→BLE / 2G4_PAIR→2G4）。复用 EVT_PAIR_RESULT(1) 上报一次瞬时的
      * 「配对失败/超时」事件。回落同时解除 mode_is_paired_window() 对自动深睡的
      * 门闩，使 2.4G 在超时且无连接时也能按期深睡（原缺陷：停在 2G4_PAIR 永不深睡）。
+     * BLE 回落后为常规模式：不广播（广播只属配对窗口），已配对主机 bond 直接重连。
      * 持续时间由 PAIR_START 的可选参数设置（bridge_mode_set_pair_timeout），
      * 0 = 不自动关闭（窗口恒开，仅连接成功或显式切模式退出）。 */
     if (mode_is_paired_window(s_mode) && s_pair_timeout_s != 0u &&

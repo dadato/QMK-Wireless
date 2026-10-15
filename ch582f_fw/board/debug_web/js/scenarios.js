@@ -109,7 +109,7 @@
 
   /* ---------------- battery ---------------- */
   async function battery(c, link, ch) {
-    await c.setBattery(66);
+    await c.setBattery(66, true);
     var st = await c.waitState(2000, function (f) { return f.payload.length >= 4 && f.payload[3] === 66; });
     ch.check(!!st, 'EVT_STATE.battery == 66%');
     var st2 = await c.getStatus();
@@ -220,7 +220,7 @@
     { id: 'smoke', label: 'smoke · 基础与全指令冒烟', hint: '版本/状态/MAC/ADC/PING + HID 五类 + 透传 + 越界参数', destructive: false, run: smoke },
     { id: 'nv', label: 'nv · 用户 NV 读写', hint: '32B 单元写-读回(0/1/30/45) + 越界 ERR(PARAM)', destructive: false, run: nv },
     { id: 'config', label: 'config · SET_CONFIG 五项', hint: '五项键（跑完恢复默认）+ 未知键 ERR(PARAM)', destructive: false, run: config },
-    { id: 'battery', label: 'battery · 电量注入', hint: 'SET_BATTERY(66) → EVT_STATE + GET_STATUS 一致', destructive: false, run: battery },
+    { id: 'battery', label: 'battery · 电量注入', hint: 'SET_BATTERY(66, 充电中) → EVT_STATE + GET_STATUS 一致', destructive: false, run: battery },
     { id: 'sleep', label: 'sleep · 睡眠分级', hint: 'IDLE/DEEP/WAKE 分级行为（DEEP 唤醒容错）', destructive: false, run: sleepScn },
     { id: 'pair_2g4', label: 'pair_2g4 · 2.4G 配对', hint: '需 Dongle 已进配对窗口（键盘发起）', destructive: false, run: pair2g4 },
     { id: 'typing_2g4', label: 'typing_2g4 · 2.4G 打字', hint: '需已配对；PC 端人工确认字符', destructive: false, run: typing2g4 },

@@ -527,13 +527,6 @@ static uint16_t bridge_hid_process_event(uint8_t task_id, uint16_t events)
     return 0u;
 }
 
-static bool s_adv_intent = true;
-
-void bridge_ble_hidsvc_set_adv_intent(bool on)
-{
-    s_adv_intent = on;
-}
-
 static void bridge_hid_state_cb(gapRole_States_t newState, gapRoleEvent_t *pEvent)
 {
     if (newState == GAPROLE_CONNECTED) {
@@ -566,16 +559,13 @@ static void bridge_hid_state_cb(gapRole_States_t newState, gapRoleEvent_t *pEven
             sdk_ble_on_disconnect(0u);
         }
         /* 有连接期间发起的切槽：此时已无连接，补做切槽（含换槽地址 + 重开广播）。
-         * 该路径自己会开启目标槽的广播，故直接返回，不再走下面的通用恢复。 */
+         * 该路径自己会开启目标槽的广播，故直接返回，不再走通用恢复。 */
         if (sdk_ble_resume_pending()) {
             return;
         }
-        /* 仅在「本意要保持可连接」时才自动恢复广播；
-         * sdk_ble_deinit() 会先置 adv_intent=false，避免停广播被立刻撤销。 */
-        if (s_adv_intent) {
-            uint8_t en = TRUE;
-            (void)GAPRole_SetParameter(GAPROLE_ADVERT_ENABLED, sizeof(uint8_t), &en);
-        }
+        /* 意外断链：按广播意图回待连（可连接不可发现广播，已配对主机 bond 直接
+         * 重连）；deinit 主动断链则 intent=false，保持静默（见 sdk 层广播策略）。 */
+        sdk_ble_on_gap_waiting();
         bridge_dbg_mark(0x45);          /* WAITING 分支处理完毕 */
     } else if (newState == GAPROLE_STARTED) {
         /* GAP 刚就绪（GAP_ConfigDeviceAddr 此刻才被允许调用）：应用当前槽的专属地址，

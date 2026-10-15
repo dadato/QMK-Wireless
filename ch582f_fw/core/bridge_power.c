@@ -14,7 +14,9 @@ static bool     s_charger;
 static uint32_t s_last_sample_ms;
 static uint32_t s_last_report_ms;   /* 上次 EVT_BATTERY 上报时刻 */
 static uint8_t  s_last_report_pct;  /* 上次上报百分比；0xFF=尚未上报 */
+static uint8_t  s_last_report_flags;/* 上次上报标志位；0xFF=尚未上报 */
 static uint8_t  s_ext_pct;      /* 主控下发的电量（0x87） */
+static bool     s_ext_charging; /* 主控下发的充电状态（0x87 flags bit0） */
 static bool     s_ext_valid;
 
 void bridge_power_init(void)
@@ -24,10 +26,12 @@ void bridge_power_init(void)
     s_alarm          = 0u;
     s_charger        = false;
     s_ext_pct        = 0u;
+    s_ext_charging   = false;
     s_ext_valid      = false;
     s_last_sample_ms = port_millis();
     s_last_report_ms = s_last_sample_ms;
     s_last_report_pct = 0xFFu;
+    s_last_report_flags = 0xFFu;
 
     bridge_power_sample();
     LOG_I(BRIDGE_MOD_PWR, "init mv=%u pct=%u chrg=%u",
@@ -75,7 +79,8 @@ void bridge_power_sample(void)
 
     bool use_ext = (src != BRIDGE_BATT_SRC_LOCAL) && s_ext_valid;
     s_pct = use_ext ? s_ext_pct : bridge_power_mv_to_percent(s_mv);
-    s_charger = port_charger_active();
+    /* 充电状态同源仲裁：外部有效时用主控下发的充电位，否则读本地 CHRG_STAT。 */
+    s_charger = use_ext ? s_ext_charging : port_charger_active();
     s_last_sample_ms = port_millis();
 
     uint8_t prev = s_alarm;
@@ -113,15 +118,18 @@ void bridge_power_poll(void)
         return;
     }
 
-    bool changed = (s_last_report_pct != s_pct);
+    /* 变化判据含充电状态：插拔充电器（电量未变）也要上报。 */
+    uint8_t flags = bridge_power_batt_flags();
+    bool changed = (s_last_report_pct != s_pct) || (s_last_report_flags != flags);
     bool due = (cfg->batt_report_period_s != 0u) &&
                ((uint32_t)(now - s_last_report_ms) >=
                 (uint32_t)cfg->batt_report_period_s * 1000u);
 
     if ((changed && cfg->batt_report_on_change != 0u) || due) {
-        bridge_evt_battery(s_mv, s_pct);
-        s_last_report_pct = s_pct;
-        s_last_report_ms  = now;
+        bridge_evt_battery(s_mv, s_pct, flags);
+        s_last_report_pct   = s_pct;
+        s_last_report_flags = flags;
+        s_last_report_ms    = now;
     }
 }
 
@@ -145,6 +153,11 @@ bool bridge_power_charger_active(void)
     return s_charger;
 }
 
+uint8_t bridge_power_batt_flags(void)
+{
+    return s_charger ? BRIDGE_BATT_FLAG_CHARGING : 0u;
+}
+
 void bridge_power_note_charger(bool active)
 {
     if (s_charger != active) {
@@ -153,16 +166,21 @@ void bridge_power_note_charger(bool active)
     }
 }
 
-void bridge_power_set_external(uint8_t percent)
+void bridge_power_set_external(uint8_t percent, bool charging)
 {
     if (percent > 100u) {
         percent = 100u;
     }
-    if (!s_ext_valid || s_ext_pct != percent) {
-        s_ext_pct   = percent;
-        s_ext_valid = true;
-        s_pct       = percent;
-        LOG_I(BRIDGE_MOD_PWR, "batt ext pct=%u", percent);
+    if (!s_ext_valid || s_ext_pct != percent || s_ext_charging != charging) {
+        s_ext_pct      = percent;
+        s_ext_charging = charging;
+        s_ext_valid    = true;
+        s_pct          = percent;
+        /* 来源非 LOCAL 时该值即刻生效，避免等到下次 ADC 采样才更新充电态。 */
+        if (bridge_cfg_get()->battery_src != BRIDGE_BATT_SRC_LOCAL) {
+            s_charger = charging;
+        }
+        LOG_I(BRIDGE_MOD_PWR, "batt ext pct=%u chrg=%u", percent, (unsigned)charging);
     }
 }
 

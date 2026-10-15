@@ -46,10 +46,4 @@
  * 每次连接后 BLE 侧会周期性地冒出乱码按键。 */
 void bridge_ble_hidsvc_override_cbs(void);
 
-/* 广播意图开关：
- *   true  = 断链后自动恢复广播（上电默认 / 进入配对窗口）
- *   false = 主动停广播（sdk_ble_deinit），断链后不再自动开
- * 用于区分「链路异常断开」与「上层要求关闭射频」两种 GAPROLE_WAITING。 */
-void bridge_ble_hidsvc_set_adv_intent(bool on);
-
 #endif /* BRIDGE_BLE_HIDSVC_H */

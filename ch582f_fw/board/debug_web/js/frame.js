@@ -56,7 +56,7 @@
     TUNNEL_BLE: 0x19,
     NV_WRITE: 0x1A,
     NV_READ: 0x1B,
-    SET_BATTERY: 0x1C,
+    SET_BATTERY: 0x1C, /* 下发电量：payload [pct u8][flags u8]（bit0 = 充电中） */
     SLEEP: 0x1D,
     GET_ADC: 0x1E,
     SET_NAME: 0x1F,
@@ -143,6 +143,8 @@
   /* 主机电源状态（bridge_types.h：EVT_HOST_POWER / BRIDGE_RADIO_PKT_HOST） */
   var HOST = { AWAKE: 0, SUSPEND: 1 };
   var HOST_NAMES = { 0: 'AWAKE', 1: 'SUSPEND' };
+  /* 电量载荷标志位（bridge_types.h：EVT_BATTERY / CMD_SET_BATTERY 的 flags 字节） */
+  var BATT_FLAG = { CHARGING: 0x01 };
   /* 无线综合状态（bridge_types.h：CMD_GET_WIRELESS_STATE 应答单字节） */
   var WL = {
     USB: 0, IDLE: 1, BLE_PAIRING: 2, '2G4_PAIRING': 3, BLE_LINKED: 4,
@@ -358,6 +360,7 @@
     NAME_TARGET: NAME_TARGET, BATT_SRC: BATT_SRC, SLEEP: SLEEP,
     SLEEP_POLICY: SLEEP_POLICY, RADIO: RADIO, RADIO_NAMES: RADIO_NAMES,
     HOST: HOST, HOST_NAMES: HOST_NAMES,
+    BATT_FLAG: BATT_FLAG,
     WL: WL, WL_NAMES: WL_NAMES,
     TUNNEL_USB_LEN: TUNNEL_USB_LEN, TUNNEL_BLE_LEN: TUNNEL_BLE_LEN,
     TEST_CH_MAX: TEST_CH_MAX, TEST_POWER_MAX: TEST_POWER_MAX,

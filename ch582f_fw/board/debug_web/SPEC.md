@@ -145,7 +145,7 @@ CH582F 模组 UART1 (PA8=RXD1 / PA9=TXD1)
 | `GET_BLE_SLOTS` | `0x0F` | — | `[s1 u8][s2 u8][s3 u8][s4 u8][last_active u8]` | BLE 多主机槽绑定状态：`s1..s4`=槽 1..4 是否已绑定（0=空/1=已绑定）；`last_active`=最近活跃槽 1..4，0=无。仅键盘模组支持，Dongle 侧 → `ERR(STATE)` |
 | `NV_WRITE` | `0x1A` | `[addr u8][data 32B]` | — | 写用户 NV 单元 |
 | `NV_READ` | `0x1B` | `[addr u8]` | `[addr u8][data 32B]` | 读用户 NV 单元 |
-| `SET_BATTERY` | `0x1C` | `[percent u8]` | —（随后 `EVT_STATE`） | 注入电量 |
+| `SET_BATTERY` | `0x1C` | `[percent u8][flags u8]` | —（随后 `EVT_STATE`） | 注入电量与充电状态；`flags` bit0=充电中（1=充电/0=未充电），其余位保留 0；`flags` 可省略（旧版单字节仍接受，按未充电处理） |
 | `SLEEP` | `0x1D` | `[level u8]` | — | `0`=唤醒 / `1`=浅睡 / `2`=深睡 |
 | `SLEEP_CFG` | `0x25` | `[idle_s u16 LE][deep_s u16 LE]` | — | 配置 AUTO 策略自动休眠门限（单位 s，落盘）：`idle_s`=距最近串口接收活动达该秒数后允许浅睡（0=禁用自动浅睡）；`deep_s`=未连接且空闲达该秒数后进深睡（0=禁用自动深睡）；`len≠4` → `ERR(PARAM)` |
 | `BATTERY_CFG` | `0x26` | `[enable u8][on_change u8][period_s u8]` | — | 配置 `EVT_BATTERY` 的开关与发送机制（落盘）：`enable`=总开关（0=关/1=开）；`on_change`=电量变化时立即上报（0=关/1=开）；`period_s`=定时上报周期（单位 S，0=关闭定时）；`len≠3` → `ERR(PARAM)`；**`EVT_BATTERY` 仅在 `battery_src=LOCAL`（本地 ADC）时才会上报** |
@@ -194,7 +194,7 @@ CH582F 模组 UART1 (PA8=RXD1 / PA9=TXD1)
 | --- | --- | --- | --- |
 | `EVT_STATE` | `0x80` | `[mode u8][connected u8][profile u8][battery u8]` | 状态变更 |
 | `EVT_LEDS` | `0x81` | `[led_state u8]` | 主机 LED（Num/Caps/Scroll） |
-| `EVT_BATTERY` | `0x82` | `[mv u16 LE][percent u8]` | 电量上报（仅 `battery_src=LOCAL` 时按 `BATTERY_CFG` 开关/变化/定时下发） |
+| `EVT_BATTERY` | `0x82` | `[mv u16 LE][percent u8][flags u8]` | 电量上报（仅 `battery_src=LOCAL` 时按 `BATTERY_CFG` 开关/变化/定时下发）；`flags` bit0=充电中（1=充电/0=未充电），其余位保留 0；充电状态变化也会触发上报 |
 | `EVT_PAIR_RESULT` | `0x83` | `[result u8][profile u8]` | 配对结果（`result` 0=成功 / 1=失败或配对窗口超时） |
 | `EVT_ERROR` | `0x84` | `[code u8]` | 错误码（见 4.10） |
 | `EVT_TUNNEL_USB` | `0x85` | ≤64B | USB 透传上报 |
@@ -302,7 +302,7 @@ GET_STATUS  请求：AA 55 00 02 05 00                      CRC16
 | `smoke` | 版本/状态/MAC/ADC/PING + HID 五类 + 透传 + 越界参数 → ERR(PARAM) |
 | `nv` | 32B 单元写-读回（0/1/30/61）+ 越界 ERR(PARAM) |
 | `config` | SET_CONFIG 五项（跑完恢复默认）+ 未知键 ERR(PARAM) |
-| `battery` | SET_BATTERY(66) → EVT_STATE + GET_STATUS 一致 |
+| `battery` | SET_BATTERY(66, 充电中) → EVT_STATE + GET_STATUS 一致 |
 | `sleep` | IDLE/DEEP/WAKE 分级行为 |
 | `pair_2g4` | UNPAIR→SET_MODE(2G4)→PAIR_START→EVT_PAIR_RESULT→EVT_STATE（需 Dongle） |
 | `typing_2g4` | 2.4G 打字流（需已配对；PC 端人工确认字符） |

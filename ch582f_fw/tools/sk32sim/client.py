@@ -106,8 +106,10 @@ class BridgeClient:
         p = self.link.request(proto.CMD_GET_ADC).payload
         return p[0] | (p[1] << 8)
 
-    def set_battery(self, percent: int) -> None:
-        self.link.request(proto.CMD_SET_BATTERY, bytes([percent]))
+    def set_battery(self, percent: int, charging: bool = False) -> None:
+        """下发电量（0x1C）：[pct u8][flags u8]，flags bit0 = 充电中。"""
+        flags = proto.BATT_FLAG_CHARGING if charging else 0
+        self.link.request(proto.CMD_SET_BATTERY, bytes([percent, flags]))
 
     def sleep(self, level: int) -> None:
         self.link.request(proto.CMD_SLEEP, bytes([level]))

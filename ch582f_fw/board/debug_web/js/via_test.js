@@ -4,14 +4,15 @@
  * 32B 裸透传：无 Report ID 前缀、无 status 字节，与 ota_web 的 OTA 报文语义不同。
  *   A. WebHID → Dongle IF2 EP3（Report ID 0）→ 2.4G → 键盘模组
  *              → UART EVT_TUNNEL_USB(0x85) → SK32 raw_hid_receive
- *   B. WebHID → 键盘模组 BLE HOGP vendor 集合（Report ID 5，32B IN/OUT）
+ *   B. WebHID → 键盘模组 BLE HOGP vendor 集合（Report ID 0 隐式，32B IN/OUT）
  *              → UART EVT_TUNNEL_BLE(0x86) → SK32 raw_hid_receive
  *
- * 两条通路的 Report ID 语义不同：Dongle 侧 Raw HID 无编号（ID 0），键盘模组 BLE
- * HID 为复合设备、vendor 报表用 ID 5（QMK BLE 键盘固定占用 1..4）。又因两条通路
+ * 两条通路的 Report ID 语义相同（均为隐式 0）：Dongle 侧 Raw HID 为独立的 vendor-only
+ * 接口、无编号；键盘模组 BLE 侧把 vendor 单列为独立的 0x1812 服务实例，不声明 Report ID
+ * 项（隐式 0），键盘 RID1/多媒体 RID2/系统 RID3 则在另一实例中显式声明。又因两条通路
  * 现在上报相同 VID/PID，仅靠 usagePage/VID/PID/Report ID 已无法区分，故另用「是否
- * 存在键盘顶层集合」区分：Dongle IF2 为 vendor-only（无键盘集合），BLE HOGP 为单
- * 描述符复合设备（vendor 之外还有键盘 RID1/多媒体 RID2/系统 RID3）。
+ * 存在键盘顶层集合」区分：Dongle IF2 为 vendor-only（无键盘集合），BLE HOGP 为含键盘
+ * 集合的复合设备。
  *
  * 自检报文：VIA id_get_protocol_version(0x01)。SK32 的 quantum/via.c 原样回发 32B，
  * 其中 data[1]=VIA_PROTOCOL_VERSION>>8=0x00、data[2]=VIA_PROTOCOL_VERSION&0xFF=0x0D。
@@ -39,11 +40,13 @@
   var HID_VID_BLE    = 0x0194;
   var HID_PID_BLE    = 0x0464;
 
-  /* Dongle IF2 Raw HID 为 Report ID 0（隐式，独立接口，USB 下合法）；键盘模组 BLE
-   * HOGP vendor 报表为显式 Report ID 5——与键盘 RID1/多媒体 RID2/系统 RID3 同属一份
-   * 复合 report map，Windows 要求显式 ID 全覆盖，不能使用隐式 RID 0（会导致 Code 10）。 */
+  /* Dongle IF2 与键盘模组 BLE HOGP 的 VIA vendor 报表均为**隐式 Report ID 0**：
+   *   Dongle   IF2 为只含 vendor 集合的独立 HID 接口，未声明任何 Report ID 项（USB 下合法）；
+   *   BLE HOGP 侧把 vendor 单列为一个独立的 0x1812 HID 服务实例——该实例只有 vendor 一个
+   *            顶层集合且不含 0x85（键盘 RID1/多媒体 RID2/系统 RID3 在另一实例中显式声明）。
+   * 官方 VIA 的 WebHID 硬编码 sendReport(0, data)，两条通路都命中 ID 0 的 Output 特征。 */
   var HID_RID_DONGLE = 0;
-  var BLE_RID_RAW    = 5;
+  var BLE_RID_RAW    = 0;
 
   /* 通路 A 默认筛选（Dongle） */
   var FILTER_DONGLE = [{ usagePage: HID_USAGE_PAGE, vendorId: HID_VID_DONGLE, productId: HID_PID_DONGLE }];
@@ -220,7 +223,7 @@
     opts = opts || {};
     this.log = opts.log || function () {};
     this.onDisconnect = opts.onDisconnect || function () {};
-    /* Raw HID 报表编号：Dongle=0（无编号），键盘模组 BLE=5（复合 HID vendor 报表） */
+    /* Raw HID 报表编号：两条通路均为隐式 0（Dongle 无编号 / BLE vendor 单列实例无编号） */
     this.reportId = (opts.reportId === undefined) ? HID_RID_DONGLE : opts.reportId;
     /* 本通路是否为「含键盘集合的复合设备」（BLE HOGP=true / Dongle IF2=false） */
     this.bleKind = !!opts.bleKind;
@@ -314,9 +317,9 @@
     if (dev && dev.opened) { try { await dev.close(); } catch (e) { /* ignore */ } }
   };
 
-  /** 复合设备里键盘等其它报表也会走 inputreport，故按本通路约定的 reportId（Dongle=0 /
-   *  键盘模组 BLE=5）且长度 32B 过滤出 VIA Raw HID 报文。BLE 复合描述符里键盘 RID1/
-   *  多媒体 RID2/系统 RID3 的输入报表 reportId≠0，会被此处滤除。
+  /** 复合设备里键盘等其它报表也会走 inputreport，故按本通路约定的 reportId（两条通路
+   *  均为 0）且长度 32B 过滤出 VIA Raw HID 报文。键盘实例里键盘 RID1/多媒体 RID2/
+   *  系统 RID3 的输入报表 reportId≠0，会被此处滤除（vendor 单列在隐式 RID 0 的实例中）。
    *  批量测试时 waiter 可带 match(u8) 谓词：仅谓词命中的回包 resolve，
    *  未命中的回包视作 stale（错序/重复）收集到 waiter.stale，不打断本次等待。 */
   ViaHid.prototype._handleReport = function (e) {

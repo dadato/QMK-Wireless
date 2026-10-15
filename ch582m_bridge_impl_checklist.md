@@ -133,7 +133,7 @@
 |---|---|---|
 | `0x80` | `EVT_STATE` | `void bridge_evt_state(void);` |
 | `0x81` | `EVT_LEDS` | `void bridge_evt_leds(uint8_t led_state);` |
-| `0x82` | `EVT_BATTERY` | `void bridge_evt_battery(uint16_t mv, uint8_t percent);`（仅 `battery_src=LOCAL` 且 `BATTERY_CFG` 总开关开启时上报） |
+| `0x82` | `EVT_BATTERY` | `void bridge_evt_battery(uint16_t mv, uint8_t percent, uint8_t flags);`（仅 `battery_src=LOCAL` 且 `BATTERY_CFG` 总开关开启时上报；`flags` bit0 = `BRIDGE_BATT_FLAG_CHARGING`） |
 | `0x83` | `EVT_PAIR_RESULT` | `void bridge_evt_pair_result(uint8_t result, uint8_t profile);` |
 | `0x84` | `EVT_ERROR` | `void bridge_evt_error(uint8_t code);` |
 | `0x85` | `EVT_TUNNEL_USB` | `void bridge_evt_tunnel(uint8_t kind, const uint8_t *payload, uint8_t len);`（`kind = BRIDGE_TUNNEL_USB`） |
@@ -800,7 +800,7 @@ make -C wireless/ch582f_fw/test_host DONGLE=1 test # dongle 角色
   - **上电应用**：`bridge_app_init()` 读回持久化的名称 / VID-PID 下发端口层
     （`app_apply_ident()`，仅在与编译期默认值不同时才下发，避免默认配置下多余 USB 重枚举）
   - **外部电量**：`CMD_SET_BATTERY` 0x1C / `SET_CONFIG` key 0x05 → `BRIDGE_BATT_SRC_EXTERNAL`，
-    由 SK32 上传（`bridge_power.c` 已按该源选择）
+    由 SK32 上传（`bridge_power.c` 已按该源选择，含 `flags` bit0 充电状态）
 - 目标侧构建：本仓库已内置 SDK submodule（`sdk/ch583` @ bd508ad7），
   工具链需 `riscv-none-embed-`（本机 MounRiver Studio2）或 `riscv-wch-elf-`；
   M0~M8 的实机验证项（第 10 章）仍全部待执行。
@@ -818,9 +818,10 @@ make -C wireless/ch582f_fw/test_host DONGLE=1 test # dongle 角色
   - 上电应用：`bridge_app_init()` → `app_apply_ident()`，仅在持久值与编译期默认值
     （`BRIDGE_BLE_NAME_DEFAULT` / `BRIDGE_USB_NAME_DEFAULT` / `BRIDGE_USB_VID` /
     `BRIDGE_USB_PID`）不同时才下发，避免默认配置下每次上电多一次 USB 重枚举。
-- **外部电量**：`CMD_SET_BATTERY` 0x1C（cycle 内下发电量百分比）或
-  `SET_CONFIG` key 0x05 置 `BRIDGE_BATT_SRC_EXTERNAL`(2)；`bridge_power.c` 在
-  `AUTO` 下"外部有效则用外部"，在 `EXTERNAL` 下仅用 SK32 上传值，本地 ADC 不参与。
+- **外部电量**：`CMD_SET_BATTERY` 0x1C（cycle 内下发 `[percent][flags]`，`flags` bit0=充电中）或
+    `SET_CONFIG` key 0x05 置 `BRIDGE_BATT_SRC_EXTERNAL`(2)；`bridge_power.c` 在
+    `AUTO` 下"外部有效则用外部"，在 `EXTERNAL` 下仅用 SK32 上传值，本地 ADC 不参与；
+    外部有效时充电状态同样取自外部上传的 `flags`（否则取本地 `CHRG_STAT`）。
 - **2.4G 跳频：未启用**（`BRIDGE_FEATURE_RF24_HOP=0`，`RF24_HOP_PERIOD=0`，仅作将来接入自定义跳频的
   预留开关）。厂商 `RF_PHY_Hop` 例程中 `RF_FrequencyHoppingTx(resendCount)` /
   `RF_FrequencyHoppingRx(timeoutMS)` 均**不带应用载荷**，是 TX 端每周期全通道遍历、RX 端每周期

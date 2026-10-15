@@ -121,7 +121,7 @@ def scenario_config(c: BridgeClient, link: BridgeLink, ch: Checks, **kw) -> None
 # ---------------------------------------------------------------------------
 def scenario_battery(c: BridgeClient, link: BridgeLink, ch: Checks, **kw) -> None:
     print("== 电量：CMD_SET_BATTERY → EVT_STATE ==")
-    c.set_battery(66)
+    c.set_battery(66, charging=True)
     st = c.wait_state(timeout=2.0, pred=lambda f: len(f.payload) >= 4 and f.payload[3] == 66)
     ch.check(st is not None, "EVT_STATE.battery == 66%")
     st2 = c.get_status()

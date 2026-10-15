@@ -287,7 +287,7 @@ def main() -> int:
     time.sleep(0.7)
     check(link.stats.pong_rx >= 2, f"心跳 PING→PONG（pong={link.stats.pong_rx}）")
 
-    link.request(proto.CMD_SET_BATTERY, bytes([88]))
+    link.request(proto.CMD_SET_BATTERY, bytes([88, proto.BATT_FLAG_CHARGING]))
     ev = link.wait_event(timeout=0.5, cmd=proto.EVT_STATE)
     check(ev.payload == bytes([proto.MODE_2G4, 1, 1, 88]), "EVT_STATE 载荷解析")
     time.sleep(0.6)

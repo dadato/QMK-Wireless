@@ -341,7 +341,7 @@ NKRO 相关：`BRIDGE_NKRO_USAGE_BASE=4`、`BRIDGE_NKRO_MAX_KEYS=6`（降级 6KR
 | --- | --- | --- |
 | `0x80` | EVT_STATE | 模式/连接/配置变化 |
 | `0x81` | EVT_LEDS | 主机 LED 状态 |
-| `0x82` | EVT_BATTERY | 电量/电压上报（仅 `battery_src=LOCAL`，按 `BATTERY_CFG` 门控） |
+| `0x82` | EVT_BATTERY | 电量/电压/充电状态上报（仅 `battery_src=LOCAL`，按 `BATTERY_CFG` 门控） |
 | `0x83` | EVT_PAIR_RESULT | 配对结果 |
 | `0x84` | EVT_ERROR | 各类错误 |
 | `0x85` | EVT_TUNNEL_USB | USB 透传上行 |
@@ -878,20 +878,26 @@ Shift+A : AA 55 08 10 17 00 02 00 04 00 00 00 00 00 07 CB
 
 ### 9.26 `0x1C` SET_BATTERY — 外部电量上报
 
-- **功能**：由外部（如键盘主控）上报电量百分比。
-- **现象/时序**：`bridge_power_set_external(percent)`；仅当 `battery_src=EXTERNAL` 时优先于本地 ADC；先回 ACK，再下发 `EVT_STATE`。低电告警：`LOW`（≤20%）、`CRIT`（≤5%）。
-- **请求 payload（1B）**：`[percent]` 取值明细：
+- **功能**：由外部（如键盘主控）上报电量百分比与充电状态。
+- **现象/时序**：`bridge_power_set_external(percent, charging)`；仅当 `battery_src=EXTERNAL/AUTO` 时优先于本地 ADC（`charging` 随之取代本地 `CHRG_STAT` 作为充电状态来源）；先回 ACK，再下发 `EVT_STATE`。低电告警：`LOW`（≤20%）、`CRIT`（≤5%）。
+- **请求 payload（1~2B）**：`[percent u8][flags u8]` 取值明细：
 
-| 值 | 含义 |
-| --- | --- |
-| `0x00`..`0x64` | 电量百分比 0..100% |
-| `>0x64` | 截断为 100% |
+| 偏移 | 字段 | 取值含义 |
+| --- | --- | --- |
+| 0 | `percent` | `0x00`..`0x64` = 电量 0..100%；`>0x64` 截断为 100% |
+| 1 | `flags` | 电量标志位（见下表）；**可省略**（旧版单字节仍接受，按未充电处理） |
+
+| `flags` 位 | 名称 | 取值含义 |
+| --- | --- | --- |
+| bit0 | `CHARGING` | `1`=正在充电 / `0`=未充电 |
+| bit1~7 | — | 保留，置 0 |
 
 - **应答**：`FLAG_ACK`；`len < 1` → `PARAM`。
 
 ```
-上报 66% : AA 55 01 1C 22 00 42 E8 6F
-应答     : AA 55 00 1C 22 02 04 F2
+上报 66%（未充电）: AA 55 02 1C 22 00 42 00 A9 BB
+上报 66%（充电中）: AA 55 02 1C 22 00 42 01 88 AB
+应答             : AA 55 00 1C 22 02 04 F2
 ```
 
 ---
@@ -1142,17 +1148,19 @@ AA 55 01 81 00 01 03 83 13   (leds=0x03 → Num+Caps)
 ### 10.3 `0x82` EVT_BATTERY — 电量上报
 
 - **触发**：**仅当 `battery_src = LOCAL`（本地 ADC）** 且 `BATTERY_CFG (0x26)` 总开关为开时才上报；`AUTO` / `EXTERNAL` 源不产生该事件。
-- **门控**：`on_change=1` 时电量百分比变化即上报（并刷新定时基准）；`period_s≠0` 时距上次上报达该秒数定时上报（`period_s=0` 关闭定时）。
-- **payload（3B）**：
+- **门控**：`on_change=1` 时电量百分比**或充电状态**变化即上报（并刷新定时基准）；`period_s≠0` 时距上次上报达该秒数定时上报（`period_s=0` 关闭定时）。
+- **payload（4B）**：
 
 | 偏移 | 字段 | 取值含义 |
 | --- | --- | --- |
 | 0 | `mv_lo` | 电压低字节（mV，LE16 低位） |
 | 1 | `mv_hi` | 电压高字节（mV，LE16 高位） |
 | 2 | `percent` | 电量百分比 0..100 |
+| 3 | `flags` | 电量标志位：bit0 `CHARGING`（`1`=充电中/`0`=未充电），bit1~7 保留置 0 |
 
 ```
-AA 55 03 82 00 01 3C 0F 42 E4 C8   (0x0F3C=3900mV, 0x42=66%)
+AA 55 04 82 00 01 3C 0F 42 00 5C 7B   (3900mV / 66% / 未充电)
+AA 55 04 82 00 01 3C 0F 42 01 7D 6B   (3900mV / 66% / 充电中)
 ```
 
 ### 10.4 `0x83` EVT_PAIR_RESULT — 配对结果

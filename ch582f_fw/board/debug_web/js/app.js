@@ -309,7 +309,8 @@
         var b = D.decodeBattery(fr.payload);
         setVal('stBattery', b.percent + '%');
         setVal('stAdc', b.mv + ' mV');
-        log('INFO', 'EVT_BATTERY ' + b.mv + 'mV / ' + b.percent + '%', '←');
+        log('INFO', 'EVT_BATTERY ' + b.mv + 'mV / ' + b.percent + '%' +
+          (b.charging ? ' / 充电中' : ''), '←');
       } else if (fr.cmd === F.EVT.LEDS) {
         setLeds(D.decodeLeds(fr.payload));
         log('INFO', 'EVT_LEDS ' + F.bytesToHex(fr.payload), '←');

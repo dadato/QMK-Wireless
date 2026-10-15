@@ -64,6 +64,8 @@ static bool     s_ble_inited;
 static uint16_t s_ble_conn = SDK_BLE_CONN_INVALID;
 static bool     s_ble_teardown;              /* sdk_ble_deinit 主动断链中（见 sdk_ble_on_disconnect） */
 static bool     s_adv_name_mac;             /* 广播名是否追加 MAC 后缀（D6） */
+static bool     s_adv_intent = true;        /* 广播意图：意外断链后是否回待连广播（见广播策略注释） */
+static bool     s_adv_disc   = true;        /* 当前广播可发现性：配对窗口=true / 待连=false */
 static uint8_t  s_ble_addr_prof;            /* 已应用的「按槽区分」BLE 地址所属槽，0=未应用 */
 static uint8_t  s_ble_switch_pending;       /* 待执行的切槽（有连接时延后），0=无 */
 
@@ -717,7 +719,6 @@ int sdk_ble_stack_init(void)
      * 故必须在它之后覆盖：屏蔽厂商演示键码定时器，并把连接/断开、
      * LED 输出接入本工程（见 bridge_ble_hidsvc.c）。 */
     bridge_ble_hidsvc_override_cbs();
-    bridge_ble_hidsvc_set_adv_intent(true);
     /* 多主机：上电装载 4 槽绑定索引表 */
     bridge_mh_init();
     /* HOGP 之外再挂一个自定义 GATT 透传服务（TX notify / RX write，见文末） */
@@ -735,8 +736,8 @@ int sdk_ble_deinit(void)
     if (!s_ble_inited) {
         return BRIDGE_OK;
     }
-    /* 先撤广播意图，否则状态回调会在 GAPROLE_WAITING 时把广播又打开 */
-    bridge_ble_hidsvc_set_adv_intent(false);
+    /* 若随后有主动断链产生的 GAPROLE_WAITING，不得再恢复广播（彻底离开 BLE） */
+    s_adv_intent = false;
     if (s_ble_conn != SDK_BLE_CONN_INVALID) {
         /* 主动断链：标记后随后的 link-terminated 事件不再上报 core（否则 core 会把
          * 它当成意外掉线，重入 port_radio_connect_profile / 误入配对窗口 → 见 Fix 1 说明）。 */
@@ -818,6 +819,16 @@ bool sdk_ble_is_connected(void)
     return (s_ble_conn != SDK_BLE_CONN_INVALID);
 }
 
+/* ---------------- 广播策略（可连接性 / 可发现性） ----------------
+ * - 配对窗口（pair_start）：可连接 + 可发现广播，新主机能扫到并配对；
+ * - 待连（adv_resume / 掉线自动恢复）：可连接 + 不可发现广播——BLE 外设只有
+ *   处于可连接广播态，central（已配对主机）才发得起连接；flags 不含可发现位，
+ *   新主机不会在扫描列表里看到（「只有配对模式才会被扫到/广播名可见」）；
+ * - 连接建立：协议栈自动停广播；
+ * - deinit：intent=false + 显式撤广播，此后 WAITING 不再恢复（彻底离开 BLE）。
+ * s_adv_intent 区分「意外掉线」与「上层主动关射频的断链（deinit teardown）」。 */
+static void sdk_ble_apply_adv(void);
+
 int sdk_ble_pair_start(uint16_t timeout_s)
 {
     uint8_t adv = TRUE;
@@ -826,9 +837,10 @@ int sdk_ble_pair_start(uint16_t timeout_s)
     if (!s_ble_inited) {
         return BRIDGE_ERR_STATE;
     }
-    s_ble_teardown = false;     /* BLE 重新激活：恢复正常的掉线上报 */
-    /* 进入配对窗口 = 重新希望保持可连接：允许状态回调自动维持广播 */
-    bridge_ble_hidsvc_set_adv_intent(true);
+    s_ble_teardown     = false;     /* BLE 重新激活：恢复正常的掉线上报 */
+    s_adv_intent       = true;
+    s_adv_disc         = true;      /* 配对窗口 = 可发现 */
+    sdk_ble_apply_adv();
     return (GAPRole_SetParameter(GAPROLE_ADVERT_ENABLED, sizeof(uint8_t), &adv) == SUCCESS)
                ? BRIDGE_OK
                : BRIDGE_ERR_IO;
@@ -841,12 +853,37 @@ int sdk_ble_pair_stop(void)
     if (!s_ble_inited) {
         return BRIDGE_ERR_STATE;
     }
-    /* 先撤广播意图，否则状态回调会在 GAPROLE_WAITING 时把广播又打开 */
-    bridge_ble_hidsvc_set_adv_intent(false);
-    /* 停止广播（配对窗口结束） */
+    /* 撤广播（配对窗口退出 / 切槽前奏），不清 intent：随后的切槽序列会立即
+     * 重开广播，或由超时回落路径经 deinit/init 重新定调。 */
     return (GAPRole_SetParameter(GAPROLE_ADVERT_ENABLED, sizeof(uint8_t), &adv) == SUCCESS)
                ? BRIDGE_OK
                : BRIDGE_ERR_IO;
+}
+
+/* 待连：恢复「可连接不可发现」广播（进入 BLE 常规模式 / 掉线后自动回待连）。
+ * 已配对主机凭 bond 直接发连接请求即可重连，无需 PAIR_START。 */
+int sdk_ble_adv_resume(void)
+{
+    uint8_t adv = TRUE;
+
+    if (!s_ble_inited) {
+        return BRIDGE_ERR_STATE;
+    }
+    s_adv_intent       = true;
+    s_adv_disc         = false;     /* 待连：不可发现，新主机扫不到 */
+    sdk_ble_apply_adv();
+    return (GAPRole_SetParameter(GAPROLE_ADVERT_ENABLED, sizeof(uint8_t), &adv) == SUCCESS)
+               ? BRIDGE_OK
+               : BRIDGE_ERR_IO;
+}
+
+/* GAPROLE_WAITING（意外断链）到达：按意图决定是否回待连广播。
+ * deinit 主动断链走 teardown 抑制且 intent=false，保持射频离开状态。 */
+void sdk_ble_on_gap_waiting(void)
+{
+    if (s_adv_intent) {
+        (void)sdk_ble_adv_resume();
+    }
 }
 
 /* ---------------- 按槽区分的 BLE 设备地址 ----------------
@@ -901,7 +938,8 @@ static int sdk_ble_apply_addr(uint8_t profile)
  *     与广播，绑定数据仍在库内完好，无需应用层搬移。 */
 static int sdk_ble_switch_exec(uint8_t profile)
 {
-    /* 1) 先停广播（同时撤意图，避免状态回调在 WAITING 用旧地址重开广播） */
+    /* 1) 先停广播（撤 ADV；本同步序列随后立即重开广播，中间无机会插入
+     *    GAP 状态回调） */
     (void)sdk_ble_pair_stop();
 
     /* 2) 标记活跃 + 应用该槽地址（若协议栈尚未就绪，GAPROLE_STARTED 会补） */
@@ -1077,10 +1115,13 @@ static void sdk_ble_apply_adv(void)
         final_name[flen++] = sdk_hex_digit((uint8_t)(m & 0xFu));
     }
 
-    /* [flags][appearance][Complete Local Name]；总长 <= 31 */
+    /* [flags][appearance][Complete Local Name]；总长 <= 31。
+     * flags 可发现位按业务态区分：配对窗口 = GENERAL（扫得到）；待连 = 0
+     * （可连接但扫不到，已配对主机凭 bond 直连重连）。 */
     s_ble_adv[i++] = 0x02;
     s_ble_adv[i++] = GAP_ADTYPE_FLAGS;
-    s_ble_adv[i++] = GAP_ADTYPE_FLAGS_GENERAL | GAP_ADTYPE_FLAGS_BREDR_NOT_SUPPORTED;
+    s_ble_adv[i++] = (uint8_t)((s_adv_disc ? GAP_ADTYPE_FLAGS_GENERAL : 0u) |
+                               GAP_ADTYPE_FLAGS_BREDR_NOT_SUPPORTED);
     s_ble_adv[i++] = 0x03;
     s_ble_adv[i++] = GAP_ADTYPE_APPEARANCE;
     s_ble_adv[i++] = LO_UINT16(GAP_APPEARE_HID_KEYBOARD);

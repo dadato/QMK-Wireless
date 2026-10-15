@@ -79,6 +79,7 @@ static uint8_t  s_link      = 0u;          /* 0 disconnected / 1 linked */
 static uint8_t  s_profile   = 0u;
 static uint8_t  s_batt_pct  = 0u;
 static uint16_t s_batt_mv   = 0u;
+static bool     s_batt_charging = false;
 static uint8_t  s_led       = 0u;
 
 static uint32_t s_last_key_ms  = 0u; /* last key activity (wired+wifi) */
@@ -216,6 +217,7 @@ static void wb_emit_state(void) {
     st.led      = s_led;
     st.batt_mv  = s_batt_mv;
     st.batt_pct = s_batt_pct;
+    st.charging = s_batt_charging;
     wb_board_ops.on_state(&st);
 }
 
@@ -280,6 +282,9 @@ static void handle_evt_battery(const wb_frame_t *f) {
     if (f->len >= 3u) {
         s_batt_mv  = (uint16_t)f->payload[0] | ((uint16_t)f->payload[1] << 8);
         s_batt_pct = f->payload[2];
+        if (f->len >= 4u) {
+            s_batt_charging = (f->payload[3] & WB_BATT_FLAG_CHARGING) != 0u;
+        }
         wb_batt_eval();
         wb_emit_state();
     }
@@ -659,12 +664,15 @@ void wb_task(void) {
             s_last_batt_ms = now;
             uint16_t mv  = s_batt_mv;
             uint8_t  pct = 0u;
-            if (wb_board_ops.batt_sample && wb_board_ops.batt_sample(&mv, &pct)) {
-                s_batt_mv  = mv;
-                s_batt_pct = pct;
+            bool     chg = s_batt_charging;
+            if (wb_board_ops.batt_sample && wb_board_ops.batt_sample(&mv, &pct, &chg)) {
+                s_batt_mv       = mv;
+                s_batt_pct      = pct;
+                s_batt_charging = chg;
             }
             wb_batt_eval();
-            wb_cmd(WB_CMD_SET_BATTERY, (const uint8_t[1]){s_batt_pct}, 1u);
+            uint8_t bflags = s_batt_charging ? WB_BATT_FLAG_CHARGING : 0u;
+            wb_cmd(WB_CMD_SET_BATTERY, (const uint8_t[2]){s_batt_pct, bflags}, 2u);
         }
     }
 
@@ -748,6 +756,7 @@ bool    wb_linked(void)   { return !s_link_lost; }
 uint8_t wb_led(void)      { return s_led; }
 uint16_t wb_batt_mv(void) { return s_batt_mv; }
 uint8_t wb_batt_pct(void) { return s_batt_pct; }
+bool    wb_batt_charging(void) { return s_batt_charging; }
 bool    wb_batt_low(void) { return s_batt_low; }
 bool    wb_batt_crit(void){ return s_batt_crit; }
 

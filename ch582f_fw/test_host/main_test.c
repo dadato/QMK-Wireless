@@ -645,17 +645,32 @@ static void test_evt_battery_report(void)
     bridge_app_poll();
     CHECK(!pump_find(EVT_BATTERY, &flags, pay, &len, 4u));
 
-    /* 切 LOCAL 后立即上报（on_change 默认开），payload [mv LE16][pct] */
+    /* 切 LOCAL 后立即上报（on_change 默认开），payload [mv LE16][pct][flags] */
     CHECK_EQ(bridge_cfg_set_battery_src(BRIDGE_BATT_SRC_LOCAL), BRIDGE_OK);
     host_advance_ms(BRIDGE_FRAME_MIN_GAP_MS + 1u);
     bridge_app_poll();
     host_advance_ms(BRIDGE_FRAME_MIN_GAP_MS + 1u);
     bridge_app_poll();
     CHECK(pump_find(EVT_BATTERY, &flags, pay, &len, 4u));
-    CHECK_EQ(len, 3u);
+    CHECK_EQ(len, 4u);
     CHECK_EQ(pay[0], (uint8_t)(3800u & 0xFFu));
     CHECK_EQ(pay[1], (uint8_t)(3800u >> 8));
     CHECK_EQ(pay[2], bridge_power_battery_percent());
+    CHECK_EQ(pay[3], bridge_power_batt_flags());
+
+    /* 插上充电器（电量不变）→ 充电标志变化仍应上报，bit0 = 1。
+     * host_tx_find_frame 只扫描不消费，必须先清抓包窗口，否则会再次匹配到
+     * 上一段那条 flags=0 的旧帧；充电脚由采样读取，用强制采样 API 立即刷新。 */
+    host_set_charger(true);
+    bridge_power_sample();
+    host_tx_reset();
+    bridge_app_poll();
+    host_advance_ms(BRIDGE_FRAME_MIN_GAP_MS + 1u);
+    bridge_app_poll();
+    CHECK(pump_find(EVT_BATTERY, &flags, pay, &len, 4u));
+    CHECK_EQ(len, 4u);
+    CHECK_EQ(pay[3] & BRIDGE_BATT_FLAG_CHARGING, BRIDGE_BATT_FLAG_CHARGING);
+    host_set_charger(false);
 
     /* 复位默认，避免影响后续用例 */
     reset_all();
@@ -882,6 +897,8 @@ static void test_pair_window_timeout(void)
 
     reset_all();
     host_radio_pair_stop_reset();
+    host_radio_pair_start_reset();
+    host_radio_adv_resume_reset();
     host_tx_reset();
 
     /* 进入配对窗口 */
@@ -911,6 +928,12 @@ static void test_pair_window_timeout(void)
     CHECK_EQ(pay[0], 1u);
     CHECK_EQ(bridge_mode_get(), fallback_mode);
     CHECK_EQ(host_radio_pair_stop_count(expect_radio), 1u);
+#if !BRIDGE_BOARD_IS_DONGLE
+    /* 广播语义：PAIR_START 窗口开**可发现**广播 1 次；回落 MODE_BLE 常规经
+     * adv_resume 转「可连接不可发现」待连广播 1 次（不再走 pair_start） */
+    CHECK_EQ(host_radio_pair_start_count(BRIDGE_RADIO_BLE), 1u);
+    CHECK_EQ(host_radio_adv_resume_count(BRIDGE_RADIO_BLE), 1u);
+#endif
 
     /* 回落后不再是配对窗口：不得重复停窗口 */
     host_advance_ms((uint32_t)BRIDGE_PAIR_TIMEOUT_S * 1000u);
@@ -918,18 +941,42 @@ static void test_pair_window_timeout(void)
     CHECK_EQ(host_radio_pair_stop_count(expect_radio), 1u);
 
 #if !BRIDGE_BOARD_IS_DONGLE
-    /* 2.4G 已配对后掉线：不得重入配对窗口/重开广播，保持 MODE_2G4 并射频静默；
-     * AUTO 策略下无连接且空闲即按期自动深睡（不再经配对窗口超时回落路径）。 */
+    /* BLE 已配对后掉线：保持 MODE_BLE、无 pair 动作（连接期间不主动撤广播，
+     * 掉线后由协议栈 WAITING 恢复可连接广播——core 层零 pair 调用，resume 在
+     * port/栈层，host 桩以 adv_resume 计数见证进入模式时的待连广告）。
+     * 已配对主机（Windows 记忆 bond）直接重连，无需 PAIR_START；
+     * AUTO 策略下无连接且空闲即按期自动深睡。 */
+    reset_all();
+    CHECK_EQ(bridge_cfg_set_sleep_policy(BRIDGE_SLEEP_POLICY_AUTO), BRIDGE_OK);
+    host_radio_pair_start_reset();
+    CHECK_EQ(bridge_mode_request(MODE_BLE, false), BRIDGE_OK);   /* 已在 BLE：幂等 no-op */
+    connect_radio();
+    CHECK_EQ(bridge_mode_get(), MODE_BLE);
+    CHECK_EQ(host_radio_pair_start_count(BRIDGE_RADIO_BLE), 0u); /* BLE 常规：非可发现广播 */
+    host_radio_pair_stop_reset();                       /* 断链前清零：验证断链无 pair 动作 */
+    bridge_mode_on_radio_event(BRIDGE_RADIO_EVT_DISCONNECTED);
+    CHECK_EQ(bridge_mode_get(), MODE_BLE);              /* 保持常规模式 */
+    CHECK_EQ(host_radio_pair_stop_count(BRIDGE_RADIO_BLE), 0u);   /* 掉线零 pair_stop */
+
+    host_advance_ms((uint32_t)BRIDGE_IDLE_TO_SLEEP_S * 1000u + 1000u);
+    bridge_mode_poll();
+    CHECK_EQ(bridge_mode_get(), MODE_SLEEP);
+
+    /* 2.4G 已配对后掉线：保持 MODE_2G4（连接期间不主动撤广播、断链零 pair 动作：
+     * 配对帧由 rf24pair_is_bound() 门控自停，RX 常开，对端恢复经心跳/link_id 自动
+     * 重连）；AUTO 策略下无连接且空闲即按期自动深睡（不再经配对窗口超时回落路径）。 */
     reset_all();
     /* 默认已为 MANUAL（关闭自动休眠）：本用例验证 AUTO 策略下掉线自动深睡 */
     CHECK_EQ(bridge_cfg_set_sleep_policy(BRIDGE_SLEEP_POLICY_AUTO), BRIDGE_OK);
+    host_radio_pair_start_reset();
     CHECK_EQ(bridge_mode_request(MODE_2G4, false), BRIDGE_OK);
     connect_radio();
     CHECK_EQ(bridge_mode_get(), MODE_2G4);
-    host_radio_pair_stop_reset();                       /* 断链前清零，单测断链静默动作 */
+    CHECK_EQ(host_radio_pair_start_count(BRIDGE_RADIO_2G4), 0u);  /* 2G4 常规：不发配对/广播 */
+    host_radio_pair_stop_reset();                       /* 断链前清零：验证断链不追加动作 */
     bridge_mode_on_radio_event(BRIDGE_RADIO_EVT_DISCONNECTED);
     CHECK_EQ(bridge_mode_get(), MODE_2G4);              /* 不重入配对窗口 */
-    CHECK_EQ(host_radio_pair_stop_count(BRIDGE_RADIO_2G4), 1u);   /* 停配对/广播，射频静默 */
+    CHECK_EQ(host_radio_pair_stop_count(BRIDGE_RADIO_2G4), 0u);   /* 断链零 pair_stop */
 
     host_advance_ms((uint32_t)BRIDGE_IDLE_TO_SLEEP_S * 1000u + 1000u);
     bridge_mode_poll();
@@ -1026,7 +1073,7 @@ static void test_pair_and_unpair(void)
     CHECK_EQ(bridge_mode_get(), MODE_BLE_PAIR);
 #endif
 
-    /* 2.4G 已配对后掉线：保持常规模式、射频静默（不得重入配对窗口） */
+    /* 2.4G 已配对后掉线：保持常规模式、回到待连（不得重入配对窗口） */
     CHECK_EQ(bridge_mode_request(MODE_2G4, false), BRIDGE_OK);
     connect_radio();
     CHECK_EQ(bridge_mode_get(), MODE_2G4);
@@ -1423,14 +1470,16 @@ static void test_misc_commands(void)
     reset_all();
     host_tx_reset();
     {
-        uint8_t pct = 77u;
+        uint8_t pct[2] = { 77u, BRIDGE_BATT_FLAG_CHARGING };
         uint8_t flags = 0u, pay[8], len = 0u;
 
-        run_cmd(CMD_SET_BATTERY, 0x41u, 0u, &pct, 1u);
+        run_cmd(CMD_SET_BATTERY, 0x41u, 0u, pct, 2u);
         CHECK(pump_find(CMD_SET_BATTERY, &flags, pay, &len, 4u));
         CHECK_EQ(flags & BRIDGE_FLAG_ACK, BRIDGE_FLAG_ACK);
         CHECK_EQ(bridge_power_has_external(), true);
         CHECK_EQ(bridge_power_battery_percent(), 77u);
+        CHECK_EQ(bridge_power_batt_flags() & BRIDGE_BATT_FLAG_CHARGING,
+                 BRIDGE_BATT_FLAG_CHARGING);
 
         host_tx_reset();
         bridge_evt_state();

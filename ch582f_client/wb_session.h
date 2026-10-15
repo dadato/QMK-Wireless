@@ -37,6 +37,7 @@ uint8_t  wb_wl(void);              /* WB_WL_*  */
 uint8_t  wb_led(void);
 uint16_t wb_batt_mv(void);
 uint8_t  wb_batt_pct(void);
+bool     wb_batt_charging(void);
 bool     wb_batt_low(void);
 bool     wb_batt_crit(void);
 bool     wb_host_awake(void);

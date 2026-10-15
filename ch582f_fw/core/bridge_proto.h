@@ -49,7 +49,7 @@ int      bridge_proto_send_event(uint8_t cmd, const uint8_t *payload, uint8_t le
 /* 事件构造函数 */
 void     bridge_evt_state(void);
 void     bridge_evt_leds(uint8_t led_state);
-void     bridge_evt_battery(uint16_t mv, uint8_t percent);
+void     bridge_evt_battery(uint16_t mv, uint8_t percent, uint8_t flags);
 void     bridge_evt_pair_result(uint8_t result, uint8_t profile);
 void     bridge_evt_error(uint8_t code);
 void     bridge_evt_pong(uint8_t seq);

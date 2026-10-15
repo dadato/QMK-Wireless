@@ -140,7 +140,11 @@
     var s = p[0] || 0;
     return { state: s, num: !!(s & 0x01), caps: !!(s & 0x02), scroll: !!(s & 0x04) };
   }
-  function decodeBattery(p) { return { mv: u16le(p, 0), percent: p[2] || 0 }; }
+  /* EVT_BATTERY：[mv u16 LE][pct u8][flags u8]（bridge_types.h BRIDGE_BATT_FLAG_*，bit0 = 充电中） */
+  function decodeBattery(p) {
+    var flags = p.length >= 4 ? (p[3] || 0) : 0;
+    return { mv: u16le(p, 0), percent: p[2] || 0, flags: flags, charging: !!(flags & 0x01) };
+  }
   function decodePairResult(p) { return { result: p[0] || 0, ok: (p[0] || 0) === 0, profile: p[1] || 0 }; }
   function decodeError(p) { return { code: p[0] || 0, name: F.errCodeName(p[0] || 0) }; }
   /* EVT_HOST_POWER：[state]（0=运行/唤醒，1=挂起；bridge_types.h BRIDGE_HOST_*） */
@@ -248,7 +252,10 @@
           var l = decodeLeds(p);
           return 'LED Num=' + (l.num ? 1 : 0) + ' Caps=' + (l.caps ? 1 : 0) + ' Scroll=' + (l.scroll ? 1 : 0);
         }
-        case F.EVT.BATTERY: return '电量 ' + u16le(p, 0) + ' mV / ' + (p[2] || 0) + '%';
+        case F.EVT.BATTERY: {
+          var b = decodeBattery(p);
+          return '电量 ' + b.mv + ' mV / ' + b.percent + '%' + (b.charging ? ' 充电中' : '');
+        }
         case F.EVT.PAIR_RESULT: {
           var r = decodePairResult(p);
           return '配对' + (r.ok ? '成功' : ('失败(' + r.result + ')')) + ' 槽位=' + r.profile;

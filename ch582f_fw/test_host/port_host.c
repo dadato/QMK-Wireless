@@ -199,7 +199,15 @@ bool port_radio_is_connected(uint8_t mode)
 
 uint8_t port_radio_protocol_ver(uint8_t mode) { (void)mode; return 1u; }
 
-int port_radio_pair_start(uint8_t mode) { (void)mode; return BRIDGE_OK; }
+static uint32_t s_pair_start_cnt[3];  /* 下标 = BRIDGE_RADIO_*（0/1/2） */
+
+int port_radio_pair_start(uint8_t mode)
+{
+    if (mode < 3u) {
+        s_pair_start_cnt[mode]++;
+    }
+    return BRIDGE_OK;
+}
 
 static uint32_t s_pair_stop_cnt[3];   /* 下标 = BRIDGE_RADIO_*（0/1/2） */
 
@@ -209,6 +217,28 @@ int port_radio_pair_stop(uint8_t mode)
         s_pair_stop_cnt[mode]++;
     }
     return BRIDGE_OK;
+}
+
+static uint32_t s_adv_resume_cnt[3];  /* 下标 = BRIDGE_RADIO_*（0/1/2） */
+
+int port_radio_adv_resume(uint8_t mode)
+{
+    if (mode == BRIDGE_RADIO_BLE) {
+        s_adv_resume_cnt[mode]++;       /* 镜像真实语义：仅 BLE 有广播业务 */
+    }
+    return BRIDGE_OK;
+}
+
+uint32_t host_radio_pair_start_count(uint8_t mode)
+{
+    return (mode < 3u) ? s_pair_start_cnt[mode] : 0u;
+}
+
+void host_radio_pair_start_reset(void)
+{
+    s_pair_start_cnt[0] = 0u;
+    s_pair_start_cnt[1] = 0u;
+    s_pair_start_cnt[2] = 0u;
 }
 
 uint32_t host_radio_pair_stop_count(uint8_t mode)
@@ -221,6 +251,18 @@ void host_radio_pair_stop_reset(void)
     s_pair_stop_cnt[0] = 0u;
     s_pair_stop_cnt[1] = 0u;
     s_pair_stop_cnt[2] = 0u;
+}
+
+uint32_t host_radio_adv_resume_count(uint8_t mode)
+{
+    return (mode < 3u) ? s_adv_resume_cnt[mode] : 0u;
+}
+
+void host_radio_adv_resume_reset(void)
+{
+    s_adv_resume_cnt[0] = 0u;
+    s_adv_resume_cnt[1] = 0u;
+    s_adv_resume_cnt[2] = 0u;
 }
 
 int port_radio_connect_profile(uint8_t mode, uint8_t profile)

@@ -119,8 +119,10 @@ uint32_t sdk_ble_notify_fail_count(void);
 uint32_t sdk_ble_notify_retry_ok_count(void);
 uint32_t sdk_ble_notify_retry_drop_count(void);
 bool     sdk_ble_is_connected(void);
-int      sdk_ble_pair_start(uint16_t timeout_s);   /* 开广播 / 进入配对窗口 */
-int      sdk_ble_pair_stop(void);                  /* 关广播 / 结束配对窗口 */
+int      sdk_ble_pair_start(uint16_t timeout_s);   /* 开可发现广播：仅配对窗口业务入口 */
+int      sdk_ble_pair_stop(void);                  /* 撤广播（窗口退出 / 切槽前奏） */
+int      sdk_ble_adv_resume(void);                 /* 待连：开可连接不可发现广播（常规模式 / 掉线恢复） */
+void     sdk_ble_on_gap_waiting(void);             /* GAPROLE_WAITING：按意图回待连；供 GAP 状态回调调用 */
 int      sdk_ble_connect_profile(uint8_t profile); /* 1..4：多绑定槽选路 */
 int      sdk_ble_unpair(uint8_t profile);          /* 0xFF = 全部（含 bond 记录清除） */
 bool     sdk_ble_resume_pending(void);             /* 断链后补做「有连接期间发起的切槽」；供 GAP 状态回调调用 */

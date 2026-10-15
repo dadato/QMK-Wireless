@@ -202,6 +202,17 @@ int port_radio_pair_stop(uint8_t mode)
     return BRIDGE_ERR_PARAM;
 }
 
+int port_radio_adv_resume(uint8_t mode)
+{
+    if (!radio_idx_ok(mode) || !s_up[mode]) {
+        return BRIDGE_ERR_STATE;
+    }
+    if (mode != BRIDGE_RADIO_BLE) {
+        return BRIDGE_OK;                   /* 2.4G：RX 常开，无广播业务 */
+    }
+    return sdk_ble_adv_resume();
+}
+
 int port_radio_connect_profile(uint8_t mode, uint8_t profile)
 {
     if (mode != BRIDGE_RADIO_BLE) {

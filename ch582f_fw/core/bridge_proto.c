@@ -168,12 +168,13 @@ void bridge_evt_leds(uint8_t led_state)
     (void)bridge_proto_send_event(EVT_LEDS, &led_state, 1u);
 }
 
-void bridge_evt_battery(uint16_t mv, uint8_t percent)
+void bridge_evt_battery(uint16_t mv, uint8_t percent, uint8_t flags)
 {
-    uint8_t p[3];
+    uint8_t p[4];
     p[0] = (uint8_t)(mv & 0xFFu);
     p[1] = (uint8_t)((mv >> 8) & 0xFFu);
     p[2] = percent;
+    p[3] = flags;   /* BRIDGE_BATT_FLAG_*，bit0 = 充电中 */
     (void)bridge_proto_send_event(EVT_BATTERY, p, (uint8_t)sizeof(p));
 }
 
@@ -561,14 +562,16 @@ static void handle_nv_read(const bridge_frame_t *f)
     bridge_proto_reply(f->seq, f->cmd, out, (uint8_t)sizeof(out));
 }
 
-/* 下发电量（0x87）：SK32 自算的 0..100，优先于模组本地 ADC */
+/* 下发电量（0x87）：payload [pct u8][flags u8]（flags bit0 = 充电中）。
+ * SK32 自算的 0..100 优先于模组本地 ADC；flags 为可选（旧版单字节仍接受）。 */
 static void handle_set_battery(const bridge_frame_t *f)
 {
     if (f->len < 1u) {
         bridge_proto_error(f->seq, f->cmd, BRIDGE_ECODE_PARAM);
         return;
     }
-    bridge_power_set_external(f->payload[0]);
+    bool charging = (f->len >= 2u) && ((f->payload[1] & BRIDGE_BATT_FLAG_CHARGING) != 0u);
+    bridge_power_set_external(f->payload[0], charging);
     bridge_proto_ack(f->seq, f->cmd);
     bridge_evt_state();         /* 电量变化立即上报（对齐市售模组语义） */
 }

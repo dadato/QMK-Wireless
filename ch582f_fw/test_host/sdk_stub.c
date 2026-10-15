@@ -366,6 +366,8 @@ static uint32_t s_ble_init_cnt;
 static uint32_t s_ble_deinit_cnt;
 static uint32_t s_ble_pair_cnt;
 static uint32_t s_ble_pair_stop_cnt;
+static uint32_t s_ble_adv_resume_cnt;
+static uint32_t s_ble_gap_waiting_cnt;
 static int      s_ble_profile;
 static int      s_ble_adv;
 static int      s_ble_units;
@@ -418,6 +420,8 @@ void stub_radio_obs_reset(void)
     s_ble_deinit_cnt   = 0u;
     s_ble_pair_cnt     = 0u;
     s_ble_pair_stop_cnt = 0u;
+    s_ble_adv_resume_cnt  = 0u;
+    s_ble_gap_waiting_cnt = 0u;
     s_ble_profile      = -1;
     s_ble_adv          = -1;
     s_ble_units        = -1;
@@ -536,6 +540,17 @@ int sdk_ble_pair_stop(void)
 {
     s_ble_pair_stop_cnt++;
     return BRIDGE_OK;
+}
+
+int sdk_ble_adv_resume(void)
+{
+    s_ble_adv_resume_cnt++;
+    return BRIDGE_OK;
+}
+
+void sdk_ble_on_gap_waiting(void)
+{
+    s_ble_gap_waiting_cnt++;
 }
 
 int sdk_ble_connect_profile(uint8_t profile)

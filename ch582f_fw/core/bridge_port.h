@@ -38,6 +38,9 @@ uint8_t  port_radio_protocol_ver(uint8_t mode);
 int      port_radio_pair_start(uint8_t mode);
 /* 结束配对窗口（BLE 关广播 / 2.4G 停周期重发），幂等 */
 int      port_radio_pair_stop(uint8_t mode);
+/* 待连：进入常规无线模式时恢复可连性——BLE = 可连接不可发现广播（已配对主机
+ * bond 掉线后直接重连）；2.4G = RX 常开无需动作，返回 OK。 */
+int      port_radio_adv_resume(uint8_t mode);
 int      port_radio_connect_profile(uint8_t mode, uint8_t profile);
 int      port_radio_unpair(uint8_t mode, uint8_t profile);
 int      port_radio_set_report_period_ms(uint8_t mode, uint16_t ms);

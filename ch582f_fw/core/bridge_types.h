@@ -28,7 +28,7 @@
  *   0x88/0x23 透传数据(64B)  → CMD_TUNNEL_USB / EVT_TUNNEL_USB（VIA Raw HID 通道）
  *   0x89/0x24 BLE 透传(32B)  → CMD_TUNNEL_BLE / EVT_TUNNEL_BLE
  *                              （手机 APP GATT 通道 / usevia.app 的 WebHID Vendor 通道）
- *   0x87      下发电量       → CMD_SET_BATTERY
+ *   0x87      下发电量       → CMD_SET_BATTERY（payload [pct u8][flags u8]，见 BRIDGE_BATT_FLAG_*）
  *   0x4A/4B/4C 睡眠分级      → CMD_SLEEP
  *   0x4D      获取 ADC       → CMD_GET_ADC（应答 2B 小端 mV）
  *   0x8A/0x8B 读写 EEPROM    → CMD_NV_WRITE / CMD_NV_READ（32B/单元） */
@@ -36,7 +36,7 @@
 #define CMD_TUNNEL_BLE       0x19u
 #define CMD_NV_WRITE         0x1Au
 #define CMD_NV_READ          0x1Bu
-#define CMD_SET_BATTERY      0x1Cu
+#define CMD_SET_BATTERY      0x1Cu   /* 下发电量：payload [pct u8][flags u8]（BRIDGE_BATT_FLAG_*） */
 #define CMD_SLEEP            0x1Du
 #define CMD_GET_ADC          0x1Eu
 #define CMD_SET_NAME         0x1Fu   /* payload: [target][name...]，见 BRIDGE_NAME_TARGET_* */
@@ -88,7 +88,7 @@
 /* ---------------- 命令码：桥 → SK32 ---------------- */
 #define EVT_STATE            0x80u
 #define EVT_LEDS             0x81u
-#define EVT_BATTERY          0x82u
+#define EVT_BATTERY          0x82u   /* 电量上报：payload [mv u16 LE][pct u8][flags u8]（BRIDGE_BATT_FLAG_*） */
 #define EVT_PAIR_RESULT      0x83u
 #define EVT_ERROR            0x84u
 #define EVT_TUNNEL_USB       0x85u   /* 上报透传（USB/Dongle ↔ 上位机），<=64B */
@@ -103,6 +103,9 @@
 /* ---------------- 名称设置目标（CMD_SET_NAME 的 target） ---------------- */
 #define BRIDGE_NAME_TARGET_BLE  0x00u   /* BLE 广播名：键盘侧本地生效 */
 #define BRIDGE_NAME_TARGET_USB  0x01u   /* Dongle USB 产品名：键盘侧经 2.4G 转发 */
+
+/* ---------------- 电量载荷标志位（EVT_BATTERY / CMD_SET_BATTERY 的 flags 字节） ---------------- */
+#define BRIDGE_BATT_FLAG_CHARGING 0x01u   /* bit0：正在充电 */
 
 /* ---------------- 电量来源（SET_CONFIG key 0x05） ---------------- */
 #define BRIDGE_BATT_SRC_AUTO     0u   /* 外部有效则用外部，否则本地 ADC（默认，兼容旧行为） */

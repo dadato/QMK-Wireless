@@ -185,7 +185,7 @@ VBUS 插入  >  SK32 显式 SET_MODE  >  上次记忆模式
 | `MODE_USB` | VBUS 移除 | 记忆模式 | 初始化对应射频栈 |
 | `MODE_BLE` | `SET_MODE(2.4G)` | `MODE_2G4` | 断开 BLE、启动 2.4G |
 | `MODE_BLE` | `PAIR_START` | `MODE_BLE_PAIR` | 进入可发现广播 |
-| `MODE_2G4` | 链路丢失 > 3s | `MODE_2G4`（保持） | 保持常规模式、射频静默；**不**重开广播 / 不重入配对窗口（对端恢复经心跳 / link_id 自动重连） |
+| `MODE_2G4` | 链路丢失 > 3s | `MODE_2G4`（保持） | 保持常规模式、不广播不重入配对窗口（RX 常开，对端恢复经心跳 / link_id 自动重连） |
 | `MODE_BLE_PAIR` / `MODE_2G4_PAIR` | 配对超时 > 60s 未配对成功 | `MODE_BLE` / `MODE_2G4` | 停配对窗口（BLE 关广播 / 2.4G 停 `PAIR_REQ` 重发）、回 `EVT_PAIR_RESULT(1)`、解除深睡门闩 |
 | 任意 | 无活动 > T_idle | `MODE_SLEEP` | 关射频、进 Sleep |
 | `MODE_SLEEP` | 按键 / UART / 射频事件 | 原模式 | 快速恢复 |
@@ -246,7 +246,7 @@ VBUS 插入  >  SK32 显式 SET_MODE  >  上次记忆模式
 | `0x19` | `TUNNEL_BLE` | ≤32B | 透传到 BLE（手机 APP 通道），无 ACK |
 | `0x1A` | `NV_WRITE` | addr(1B), data(32B) | 写用户 NV 单元（每单元 32B，`addr` 越界回 `PARAM`） |
 | `0x1B` | `NV_READ` | addr(1B) | 读用户 NV 单元，应答 addr(1B)+data(32B) |
-| `0x1C` | `SET_BATTERY` | percent(1B, 0~100) | SK32 上报电量，优先于本地 ADC；随后回 `EVT_STATE` |
+| `0x1C` | `SET_BATTERY` | percent(1B, 0~100), flags(1B, 可选) | SK32 上报电量与充电状态，优先于本地 ADC；`flags` bit0=充电中（1=充电/0=未充电），省略时按未充电；随后回 `EVT_STATE` |
 | `0x1D` | `SLEEP` | level(1B) | 睡眠分级：0=唤醒 / 1=浅睡 / 2=深睡（配 `SET_CONFIG` key `SLEEP_POLICY`） |
 | `0x25` | `SLEEP_CFG` | idle_s(2B LE), deep_s(2B LE) | 配置 AUTO 策略自动休眠时间门限（单位 s，落盘）：idle_s=距最近串口接收活动达该秒数后允许浅睡（0=禁用自动浅睡）/ deep_s=未连接且空闲达该秒数后进深睡（0=禁用自动深睡）；仅 `SLEEP_POLICY=AUTO` 生效；payload 长度非 4 → `PARAM` |
 | `0x26` | `BATTERY_CFG` | enable(1B), on_change(1B), period_s(1B) | 配置 `EVT_BATTERY` 的开关与发送机制（落盘）：enable=总开关(0=关/1=开)；on_change=电量变化时立即上报(0=关/1=开)；period_s=定时上报周期(单位 S，0=关闭定时)；payload 长度非 3 → `PARAM`；**`EVT_BATTERY` 仅 `BATTERY_SRC=LOCAL`（本地 ADC）时才会上报** |
@@ -265,7 +265,7 @@ VBUS 插入  >  SK32 显式 SET_MODE  >  上次记忆模式
 |---|---|---|---|
 | `0x80` | `EVT_STATE` | mode, link, profile, battery | 状态变化主动上报 |
 | `0x81` | `EVT_LEDS` | led_state(1B) | Caps/Num/Scroll，映射 `keyboard_leds()` |
-| `0x82` | `EVT_BATTERY` | mv(2B), percent(1B) | 电量上报；**仅 `BATTERY_SRC=LOCAL`（本地 ADC）时才有**，按 `BATTERY_CFG(0x26)` 的开关/变化/定时机制下发 |
+| `0x82` | `EVT_BATTERY` | mv(2B), percent(1B), flags(1B) | 电量上报；**仅 `BATTERY_SRC=LOCAL`（本地 ADC）时才有**，按 `BATTERY_CFG(0x26)` 的开关/变化/定时机制下发；`flags` bit0=充电中（1=充电/0=未充电），其余位保留 |
 | `0x83` | `EVT_PAIR_RESULT` | result(1B), profile(1B) | 配对结果；`result=0` 成功、`=1` 失败/超时（配对窗口超过 `duration_s`（`PAIR_START` 设置，缺省 `BRIDGE_PAIR_TIMEOUT_S`=60s）未成功时发一次瞬时事件；`duration_s=0` 不超时） |
 | `0x84` | `EVT_ERROR` | code(1B) | 错误码 |
 | `0x85` | `EVT_TUNNEL_USB` | ≤64B | USB/Dongle 透传上报（VIA Raw HID 通道），无应答 |
@@ -345,7 +345,7 @@ VBUS 插入  >  SK32 显式 SET_MODE  >  上次记忆模式
 | Connection Interval | 最小允许值（7.5ms） |
 | Slave Latency | 0（追求低延迟） |
 | Supervision Timeout | ≥ 2s |
-| 重连策略 | 常规模式**不**主动广播：BLE 已配对后掉线保持射频静默，需 `PAIR_START` 重开配对窗口；2.4G 由心跳 / link_id 在对端恢复时自动重连 |
+| 重连策略 | 掉线自动回**回连态**（可连接不可发现广播）：BLE 已配对主机凭 bond **直接重连**（无需 `PAIR_START`）；2.4G 由心跳 / link_id 在对端恢复时自动重连。仅配对窗口为可发现广播（新主机可见，60s 超时） |
 
 ### 7.6 LED 状态回传
 
@@ -489,7 +489,7 @@ Dongle 以**复合设备**枚举（3 接口 / EP1~EP3），使主机侧无需驱
 - ADC 周期采样电池电压（默认 10s 一次，`MODE_SLEEP` 时降频）
 - 分压系数与电池曲线在 `InfoFlash`/配置区标定
 - 阈值：低于 **20%** 首次告警一次，低于 **5%** 重复告警
-- `EVT_BATTERY` 上报门控（`BATTERY_CFG(0x26)`，落盘）：**仅 `BATTERY_SRC=LOCAL`** 时才发；`enable`=总开关，`on_change`=电量变化即报（优先并刷新定时基准），`period_s`=定时上报周期（单位 s，0=关闭定时）；默认 1 / 1 / 10s
+- `EVT_BATTERY` 上报门控（`BATTERY_CFG(0x26)`，落盘）：**仅 `BATTERY_SRC=LOCAL`** 时才发；`enable`=总开关，`on_change`=电量百分比或充电状态变化即报（优先并刷新定时基准），`period_s`=定时上报周期（单位 s，0=关闭定时）；默认 1 / 1 / 10s
 
 ### 9.5 充电时行为
 
@@ -572,8 +572,8 @@ Dongle 以**复合设备**枚举（3 接口 / EP1~EP3），使主机侧无需驱
 |---|---|
 | UART 帧 CRC 错 | 丢弃该帧，计数；连续 10 次触发 `EVT_ERROR` |
 | UART 失联 | 见 6.4 |
-| 射频断连 | 保持当前常规模式、射频静默，**不**重开广播 / 不重入配对窗口（BLE 需 `PAIR_START`；2.4G 对端恢复自动重连） |
-| 主机长时间无响应 | 断开连接；**不**回退到配对态（保持常规模式静默） |
+| 射频断连 | 保持当前常规模式、自动回**回连态**（BLE = 可连接不可发现广播，已配对主机 bond 直接重连；2.4G RX 常开对端恢复自动重连）；不重入配对窗口 |
+| 主机长时间无响应 | 断开连接；**不**回退到配对态（保持常规模式回连态，可被已配对主机重连） |
 | 看门狗 | 启用独立看门狗，超时复位桥 |
 | 桥复位 | 复位后必须向 SK32 发 `EVT_STATE`，并执行 `HID_RELEASE_ALL` 防卡键 |
 | OTA 失败/中断 | 标志保持 `IAP`，下次上电自动重试搬运；取消/超时写 `A` 回原 App（可回退）。仅当应用+BOOT 均损坏才需 ROM ISP（见 10.1 / 10.2） |
@@ -667,7 +667,7 @@ CH582M 侧需 SK32 侧配合完成以下改动（**不在本文件实现范围**
 | 连续按键吞吐 | ≥ 50 次/秒（每次 1 帧键盘报文，含 5ms 间隔余量） |
 | 冷启动到可连接 | < 500 ms |
 | 模式切换完成 | < 200 ms（不含串口排队） |
-| 断线重连 | 常规模式不自动广播；2.4G 对端恢复即自动重连（< 3 s）；BLE 需 `PAIR_START` 重开配对窗口 |
+| 断线重连 | 常规模式掉线回回连态：BLE 已配对主机 bond 直接重连（无需 `PAIR_START`）；2.4G 对端恢复即自动重连（< 3 s） |
 | 双设备枚举 | 无线模式下主机仅见 1 个 HID |
 | 续航（1000 mAh，关灯，8h/天） | ≥ 30 天（目标，需实测） |
 | 卡键 | 0 次（模式切换/断连/复位场景全覆盖） |
