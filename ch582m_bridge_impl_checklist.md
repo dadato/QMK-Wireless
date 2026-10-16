@@ -54,6 +54,13 @@
 
 ### 2.3 分层关系
 
+**目录分层（便于移植到其它无线芯片）**：`hal/bridge_port.h`（芯片无关接口）→ `core/`（芯片无关业务）
+→ `port/<chip>/`（芯片适配层，自带 `port.mk` 与厂商 SDK，对外仅暴露 `bridge_chip.h`）→
+`app/{main.c,keyboard,dongle}`（角色应用层）→ `boot/<chip>/`（常驻 BOOT 镜像）→ `web/`（通用测试 / OTA 页面，与芯片无关）。
+换芯片只需新增 `port/<newchip>/`，`core/` `hal/` `app/` `web/` 无需改动。
+
+模块级调用关系（不变）：
+
 ```
         Main.c  ──►  Bridge_ProcessEvent()   （TMOS 任务入口）
                           │
@@ -125,7 +132,7 @@
 | `0x7F` | `PING` | 内联处理（心跳开时回 `bridge_evt_pong()`） | 是（回 `PONG`） |
 
 > 统一返回约定：处理函数为 `void`，成功/失败由函数内应答表达；`bridge_proto_dispatch()` 对未支持命令返回 `BRIDGE_ERR_UNSUPPORTED`。
-> 命令码枚举权威定义见 `core/bridge_types.h`；完整 payload / 应答格式见 [debug_web/SPEC.md](./ch582f_fw/board/debug_web/SPEC.md) §4.6 / §4.7。`0x0F`、`0x16`、`0x17` 保留未用。
+> 命令码枚举权威定义见 `core/bridge_types.h`；完整 payload / 应答格式见 [debug_web/SPEC.md](./ch582f_fw/web/debug/SPEC.md) §4.6 / §4.7。`0x0F`、`0x16`、`0x17` 保留未用。
 
 ### 3.2 下行事件（桥 → SK32）构造函数在 `bridge_proto.c`
 
@@ -688,13 +695,13 @@ LD 文件约束（与规格 10.4 对应）：
 | 实际文件 | 对应设计稿 | 说明 |
 |---|---|---|
 | `core/bridge_{app,uart,proto,mode,hid,power,cfg,test,log,ringbuf,crc16}.c` | `APP/bridge_*.c` | 改名并新增 `bridge_app.*`（主循环编排）、`bridge_ringbuf.*`、`bridge_crc16.*`；**`bridge_gpio.*` 未单列**，GPIO 并入 `bridge_port.h` 的 `port_gpio_*` |
-| `port/ch58x/bridge_port_ch58x.c` | `bridge_ble.c` / `bridge_rf24.c` / `bridge_gpio.c` 的 SDK 侧 | 实现 `core/bridge_port.h`：串口数据面、时间、NV、ADC、GPIO、系统控制、主循环 |
+| `port/ch58x/bridge_port_ch58x.c` | `bridge_ble.c` / `bridge_rf24.c` / `bridge_gpio.c` 的 SDK 侧 | 实现 `hal/bridge_port.h`：串口数据面、时间、NV、ADC、GPIO、系统控制、主循环 |
 | `port/ch58x/bridge_radio_ch58x.c` | `bridge_ble.c` + `bridge_rf24.c` | 射频统一入口 `port_radio_*`，BLE 与 2.4G 由 `mode` 参数区分 |
 | `port/ch58x/bridge_ch58x_callbacks.c` | `bridge_ble.c` / `bridge_rf24.c` 的回调 | **新增拆分**：`sdk_ble_on_led_report` / `sdk_rf24_on_recv` / `sdk_rf24_on_link` / `sdk_usb_on_led_report` 四个回调**不含 SDK 头**，抽出以便纳入主机验证 |
 | `port/ch58x/bridge_ch58x_sdk.{c,h}` | — | **新增**：BLE/系统原语边界（三个 SDK 头边界文件之一），`#include` WCH SDK 头 |
 | `port/ch58x/bridge_rf24_ch58x.c` | `bridge_rf24.c` 的 SDK 侧 | **新增**：2.4G 射频接入，按厂商 `EVT/EXAM/BLE/RF_PHY` 例程实现 `sdk_rf24_*`（`RF_RoleInit`/`RF_Config`/`RF_Tx`/`RF_Rx`/`RF_Shut` + TMOS 任务上下文投递 + 1s 心跳/连续 3 次无收断链） |
 | `port/ch58x/bridge_usb_ch58x.c` | — | **新增**：Dongle USB 复合设备（3 接口：键盘 / 辅助键 / VIA Raw HID），按厂商 `EVT/EXAM/USB/Device/CompoundDev` + `BLE_USB` 例程实现 `sdk_usb_*` |
-| `board/main.c` + `board/{keyboard,dongle}/bridge_board.h` | `Main.c` + `APP/include/bridge_cfg.h` | 两目标共用一份 main；板级差异全部由 `-Iboard/$(TARGET)` 决定 |
+| `app/main.c` + `app/{keyboard,dongle}/bridge_board.h` | `Main.c` + `APP/include/bridge_cfg.h` | 两目标共用一份 main；板级差异全部由 `-Iboard/$(TARGET)` 决定 |
 
 > 含 WCH SDK 头的**边界文件共 3 个**：`bridge_ch58x_sdk.c` / `bridge_rf24_ch58x.c` /
 > `bridge_usb_ch58x.c`；三者均**排除**在 `test_host` 构建外（`test_host/Makefile` 的
@@ -708,7 +715,7 @@ LD 文件约束（与规格 10.4 对应）：
 
 设计稿以 `Bridge_ProcessEvent`（TMOS 任务）驱动桥逻辑。落地改为**主循环直调**：
 
-- `board/main.c`：`sdk_sys_init()` → `bridge_ch58x_init()` → `for(;;) bridge_ch58x_loop()`
+- `app/main.c`：`sdk_sys_init()` → `bridge_ch58x_init()` → `for(;;) bridge_ch58x_loop()`
 - `bridge_ch58x_loop()` = `sdk_tmos_process()`（只服务 BLE 协议栈）→ `port_uart_tx_poll()` →
   `pair_key_poll()`（仅 Dongle）→ `bridge_app_poll()`
 - 理由：即便 921600 下单帧占线仅 ≤0.26ms，再叠加 TMOS 调度延迟仍不利于按键低延迟（D14）。
@@ -728,7 +735,7 @@ make -C wireless/ch582f_fw/test_host test          # keyboard 角色
 make -C wireless/ch582f_fw/test_host DONGLE=1 test # dongle 角色
 ```
 
-`test_host/board/bridge_board.h` 按角色**精确镜像** `board/{keyboard,dongle}/bridge_board.h`
+`test_host/board/bridge_board.h` 按角色**精确镜像** `app/{keyboard,dongle}/bridge_board.h`
 的被引用宏（取值完全一致），故不可为「让测试通过」而放宽该文件——否则主机测试
 会覆盖固件上不存在的分支（第 5 条保真约定）。
 

@@ -206,7 +206,7 @@ Dongle App 重新枚举 （Web 侧重连并校验版本）
 > 仅在 `FW_END` 后复位一次，故重连要求由「两次」降为「一次」。
 > ⚠️ 仅 VID/PID/usage 相同**不够**：Chrome 的 WebHID 授权按设备实例（iSerial 为空时即接口路径
 > `mi_XX`）记忆，接口布局不同会让 App 与 BOOT 成为两个实例，导致静默重连失败（表现为「要连两次」
-> 或「升完回 App 检测超时误报失败」）。BOOT 侧（`board/iap/iap_usb_main.c`）与 App 侧
+> 或「升完回 App 检测超时误报失败」）。BOOT 侧（`boot/ch58x/iap_usb_main.c`）与 App 侧
 > （`port/ch58x/bridge_usb_ch58x.c`）的描述符数组必须保持镜像一致。
 
 ### 5.2 报告长度
@@ -377,9 +377,9 @@ IN : 00 18 00*30            （status=0，chunk_max=0x18=24）
 
 ### 9.1 Dongle 侧（需改动）
 
-1. **链接脚本**：新增 `board/dongle/Link_App216K.ld`（复制键盘版，FLASH `0x2000`/216K），[Makefile](file:///c:/Users/Administrator/Desktop/qmk/qmk_firmware/wireless/ch582f_fw/Makefile#L104-L108) 的 dongle 分支改用它。
+1. **链接脚本**：新增 `app/dongle/Link_App216K.ld`（复制键盘版，FLASH `0x2000`/216K），[Makefile](file:///c:/Users/Administrator/Desktop/qmk/qmk_firmware/wireless/ch582f_fw/Makefile#L104-L108) 的 dongle 分支改用它。
 2. **App**：`DevEP3_OUT_Deal` 新增 §5.4 的 `ENTER_OTA`(+`GET_INFO`) 分派；写 DataFlash 标志（`BRIDGE_OTA_FLAG_USB_IAP`）后复位。
-3. **BOOT**：`board/iap/iap_usb_main.c`——自带 USB HID 设备栈 + EP3 收发，实现 §5.4 的 `FW_BEGIN/DATA/END/ABORT/GET_INFO`，写 Stage → CRC 复验 → 搬运 Stage→APP_A（复用 iap_common.c 共享搬运逻辑）。App 无效（空片）时也进收包模式，故工厂只烧 BOOT 即可完成首次 OTA。
+3. **BOOT**：`boot/ch58x/iap_usb_main.c`——自带 USB HID 设备栈 + EP3 收发，实现 §5.4 的 `FW_BEGIN/DATA/END/ABORT/GET_INFO`，写 Stage → CRC 复验 → 搬运 Stage→APP_A（复用 iap_common.c 共享搬运逻辑）。App 无效（空片）时也进收包模式，故工厂只烧 BOOT 即可完成首次 OTA。
    > 体积参考：本工程 BOOT 分区 8K；Dongle BOOT 实测 5.6K，充裕（以实测为准）。
 4. **标志**：复用 [bridge_ota_layout.h](file:///c:/Users/Administrator/Desktop/qmk/qmk_firmware/wireless/ch582f_fw/port/ch58x/bridge_ota_layout.h) 的记录（`0x03 = IAP` 暂存就绪、`0x04 = USB_IAP` 请求 USB 收包）。
 5. **无需额外硬件兜底**：恢复路径复用既有的 `PB22 → ROM ISP`（`port_enter_bootloader()`）。
@@ -424,7 +424,7 @@ IN : 00 18 00*30            （status=0，chunk_max=0x18=24）
 | 阶段 | 内容 | 产出 |
 | --- | --- | --- |
 | **Phase 1** | 本规格文档（含协议）评审确认 | `SPEC.md`（本文） |
-| **Phase 2** | 设计并实现 Web 应用 | `board/ota_web/`（`index.html` + `js/*`） |
+| **Phase 2** | 设计并实现 Web 应用 | `web/ota/`（`index.html` + `js/*`） |
 | **Phase 3** | Dongle 固件改动（LD / App 分派 / IAP USB HID / Makefile） | 固件源码 + `make images` 产物 |
 | **Phase 4** | 测试与验证（§10 全表） | 测试记录 / 验收报告 |
 
@@ -434,7 +434,7 @@ IN : 00 18 00*30            （status=0，chunk_max=0x18=24）
 
 - 桥协议与命令：[bridge_proto.h](file:///c:/Users/Administrator/Desktop/qmk/qmk_firmware/wireless/ch582f_fw/core/bridge_proto.h)、[bridge_types.h](file:///c:/Users/Administrator/Desktop/qmk/qmk_firmware/wireless/ch582f_fw/core/bridge_types.h)、[bridge_config.h](file:///c:/Users/Administrator/Desktop/qmk/qmk_firmware/wireless/ch582f_fw/core/bridge_config.h)
 - 参考实现：[client.py](file:///c:/Users/Administrator/Desktop/qmk/qmk_firmware/wireless/ch582f_fw/tools/sk32sim/client.py)
-- 分区布局：[bridge_ota_layout.h](file:///c:/Users/Administrator/Desktop/qmk/qmk_firmware/wireless/ch582f_fw/port/ch58x/bridge_ota_layout.h)、[iap_main.c](file:///c:/Users/Administrator/Desktop/qmk/qmk_firmware/wireless/ch582f_fw/board/iap/iap_main.c)
+- 分区布局：[bridge_ota_layout.h](file:///c:/Users/Administrator/Desktop/qmk/qmk_firmware/wireless/ch582f_fw/port/ch58x/bridge_ota_layout.h)、[iap_main.c](file:///c:/Users/Administrator/Desktop/qmk/qmk_firmware/wireless/ch582f_fw/boot/ch58x/iap_main.c)
 - Dongle USB：[bridge_usb_ch58x.c](file:///c:/Users/Administrator/Desktop/qmk/qmk_firmware/wireless/ch582f_fw/port/ch58x/bridge_usb_ch58x.c)
 - 构建：[Makefile](file:///c:/Users/Administrator/Desktop/qmk/qmk_firmware/wireless/ch582f_fw/Makefile)
 - WCH 参考：[USB_IAP](file:///c:/Users/Administrator/Desktop/qmk/qmk_firmware/wireless/WCH/CH583EVT/EVT/EXAM/IAP/USB_IAP/src/Main.c)

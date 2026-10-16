@@ -1,7 +1,7 @@
 /* CH58x SDK 原语实现 —— 全工程**唯一**包含 WCH SDK 头文件的文件
  *
  * API 基线（已逐项核对）：WCH CH583 EVT —— 仓库 openwch/ch583，
- * git submodule 固定在 wireless/ch582f_fw/sdk/ch583 @ bd508ad7。
+ * git submodule 固定在 wireless/ch582f_fw/port/ch58x/sdk/ch583 @ bd508ad7。
  * 核对依据：
  *   EVT/EXAM/SRC/StdPeriphDriver/{inc/ 与 *.c}   外设驱动
  *   EVT/EXAM/SRC/RVMSIS/core_riscv.h             PFIC_EnableIRQ / __INTERRUPT
@@ -57,7 +57,7 @@
 
 /* BLE 协议栈内存堆：CONFIG.h 中 extern 声明、CH58X_BLEInit() 里赋给 cfg.MEMAddr，
  * 必须由应用层定义（官方例程放在 hidkbd_main.c，本工程放在此边界文件，
- * 以免 board/main.c 引入 SDK 头）。 */
+ * 以免 app/main.c 引入 SDK 头）。 */
 __attribute__((aligned(4))) uint32_t MEM_BUF[BLE_MEMHEAP_SIZE / 4];
 
 static bool     s_ble_inited;
@@ -1395,7 +1395,7 @@ int sdk_ble_tunnel_send(const uint8_t *d, uint8_t len)
  *   以及 EP0 SET_REPORT（LED）与 EP3 OUT（Raw HID → 键盘）回调。
  * 说明：**不要**在本文件再定义 sdk_usb_*，否则与上述文件重复符号。
  * 注意：CH58x 上 BLE 与 USB 共用时钟/PLL，USB 初始化必须在
- *       sdk_ble_stack_init() 之后（见 board/main.c 与 bridge_ch58x_init()）。
+ *       sdk_ble_stack_init() 之后（见 app/main.c 与 bridge_ch58x_init()）。
  * ==================================================================== */
 
 /* ============================ 厂商例程回调入口 ============================ */

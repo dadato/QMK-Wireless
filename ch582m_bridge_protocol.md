@@ -27,9 +27,11 @@
 
 桥固件是运行在 CH582M 上的「无线桥」：一侧通过 **UART1** 与外挂主控（MCU/SK32 模组宿主，如键盘主控或 PC 上位机）通信，另一侧通过 **BLE / 2.4G** 无线连接受管设备（PC、手机等）。上层通过本协议下发命令，桥负责无线建链、HID 转发、透传、NV 存储、固件升级等。
 
-固件分层：
+固件分层（**换无线芯片 = 只换 `port/<chip>/`**；`core/` `hal/` `app/` `web/` 不动）：
 
 ```
+hal/             芯片无关硬件抽象接口
+  bridge_port.h    ← core/ 唯一依赖的 port 接口（UART/时间/NV/射频/USB/电源/日志）
 core/            协议与状态机（纯逻辑，PC 可测）
   bridge_types.h   ← 命令/事件/枚举权威定义
   bridge_proto.c   ← 帧分发 + 各命令 handler
@@ -39,10 +41,18 @@ core/            协议与状态机（纯逻辑，PC 可测）
   bridge_hid.c     ← HID 报表转发
   bridge_ota.c     ← 固件升级
   bridge_test.c    ← SRRC 射频测试
-port/ch58x/       WCH SDK 适配层（radio / adc / flash / tunnel…）
-board/keyboard   键盘侧：无 USB，BLE+2.4G，可睡，UART1 接 SK32
-board/dongle     Dongle 侧：USB 接 PC，恒禁睡，默认 2.4G
+port/<chip>/     芯片适配层（当前 port/ch58x/）
+  bridge_chip.h    ← app 层唯一入口（bridge_chip_boot / bridge_chip_poll）
+  bridge_port_ch58x.c 等  ← bridge_port.h 实现 + radio/usb/ble 接入
+  port.mk          ← 该芯片的构建描述（SDK 路径 / 源文件 / BOOT 镜像源）
+  sdk/ch583/       ← 厂商 SDK（git submodule）
+app/keyboard     模组（键盘侧）：无 USB，BLE+2.4G，可睡，UART1 接 SK32
+app/dongle       接收器（Dongle）：USB 接 PC，恒禁睡，默认 2.4G
+app/main.c       两角色共用入口（只依赖 bridge_chip.h，不引用芯片专有符号）
+boot/<chip>/     常驻 BOOT 镜像（OTA 搬运 / 收包恢复）
+web/             通用型 Web（debug 测试 / ota 升级，与芯片无关，同时适配模组与接收器）
 ```
+
 
 两侧角色差异（影响默认模式与睡眠策略）：
 

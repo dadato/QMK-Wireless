@@ -253,11 +253,11 @@ VBUS 插入  >  SK32 显式 SET_MODE  >  上次记忆模式
 | `0x1E` | `GET_ADC` | — | 读本地 ADC 电压，应答 mv(2B 小端) |
 | `0x1F` | `SET_NAME` | target(1B), name... | 运行时改标识：target 0=BLE 广播名 / 1=USB(Dongle) 名（另一侧经 2.4G 中继） |
 | `0x20` | `SET_USB_ID` | vid(2B LE), pid(2B LE) | 运行时改 USB VID/PID（Dongle 侧重枚举） |
-| `0x21`~`0x24` | `FW_BEGIN` / `FW_DATA` / `FW_END` / `FW_ABORT` | 见 §10 | 键盘侧 UART OTA 帧；升级流程由 `board/ota_web` 承担 |
+| `0x21`~`0x24` | `FW_BEGIN` / `FW_DATA` / `FW_END` / `FW_ABORT` | 见 §10 | 键盘侧 UART OTA 帧；升级流程由 `web/ota` 承担 |
 | `0x7F` | `PING` | — | 心跳 |
 
 > `0x18`~`0x26` 为借鉴市售模组指令集新增的扩展命令，完整 payload 与应答格式见
-> [debug_web/SPEC.md](./ch582f_fw/board/debug_web/SPEC.md) §4.6 / §4.7；`0x0F`、`0x16`、`0x17` 保留未用。
+> [debug_web/SPEC.md](./ch582f_fw/web/debug/SPEC.md) §4.6 / §4.7；`0x0F`、`0x16`、`0x17` 保留未用。
 
 **下行（桥 → SK32）**
 
@@ -436,7 +436,7 @@ Dongle 以**复合设备**枚举（3 接口 / EP1~EP3），使主机侧无需驱
 
 - 报文字节口径以对端 SK32 的 QMK `tmk_core/protocol/usb_descriptor.c` 为准
 - **VID/PID 必须与目标键盘的 `via.json` 一致**（VIA 据此匹配键盘定义）；
-  当前默认 `0x0194:0x0463`（KB17），配套 LD7_OLED 时在 `board/dongle/bridge_board.h`
+  当前默认 `0x0194:0x0463`（KB17），配套 LD7_OLED 时在 `app/dongle/bridge_board.h`
   覆盖为 `0x0194:0x0464`
 - 数据方向：键盘经 2.4G 上报的 HID/透传 → `sdk_usb_hid_send()` / `sdk_usb_tunnel_send()`；
   主机下发的 Raw HID（EP3 OUT）与 LED（EP0 `SET_REPORT`）→ 回传键盘

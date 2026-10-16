@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CH582F OTA 升级工具</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <h1>CH582F OTA 升级工具</h1>
+  <div id="compat" class="compat"></div>
+</header>
+
+<main>
+
+  <!-- 固件区（两通道共用） -->
+  <section class="card">
+    <div class="card-title">
+      <span>固件文件</span>
+      <span class="hint">支持 .bin（推荐）与 Intel HEX .hex，最大 216KB</span>
+    </div>
+    <div class="firmware-row">
+      <input type="file" id="fwFile" accept=".bin,.hex,.ihex,.txt">
+      <button id="fwClear" class="btn ghost" type="button" disabled>清除</button>
+    </div>
+    <div id="fwInfo" class="fw-info muted">未选择文件</div>
+  </section>
+
+  <!-- 通道切换 -->
+  <div class="tabs" role="tablist">
+    <button class="tab active" id="tabKb" data-panel="panelKb" role="tab">键盘模组 · 串口</button>
+    <button class="tab" id="tabDg" data-panel="panelDg" role="tab">接收器 · USB HID</button>
+  </div>
+
+  <!-- 通路 B：键盘模组（WebSerial） -->
+  <section class="card panel" id="panelKb">
+    <div class="card-title">
+      <span>键盘侧 CH582 模组</span>
+      <span class="hint">USB-TTL 直连模组 UART1（PA8/PA9），8N1；波特率可选（默认 921600）</span>
+    </div>
+    <div class="row">
+      <button class="btn" id="kbConnect" type="button">连接串口</button>
+      <button class="btn primary" id="kbStart" type="button" disabled>开始升级</button>
+      <button class="btn danger" id="kbAbort" type="button" disabled>中止</button>
+      <label class="field" title="模组 UART1 协议默认 921600 8N1；连接后锁定，断开后可改">波特率
+        <select id="kbBaudSel">
+          <option value="19200">19200</option>
+          <option value="38400">38400</option>
+          <option value="43000">43000</option>
+          <option value="57600">57600</option>
+          <option value="76800">76800</option>
+          <option value="115200">115200</option>
+          <option value="128000">128000</option>
+          <option value="230400">230400</option>
+          <option value="460800">460800</option>
+          <option value="921600" selected>921600</option>
+          <option value="1843200">1843200</option>
+          <option value="3686400">3686400</option>
+          <option value="7372800">7372800</option>
+        </select>
+      </label>
+      <label class="field">分片
+        <select id="kbChunk">
+          <option value="60" selected>60 B</option>
+          <option value="56">56 B</option>
+          <option value="48">48 B</option>
+          <option value="32">32 B</option>
+          <option value="16">16 B</option>
+        </select>
+      </label>
+    </div>
+    <div id="kbDev" class="dev-info muted">未连接</div>
+    <div class="stages" id="kbStages"></div>
+    <div class="progress">
+      <div class="bar"><div class="fill" id="kbFill"></div></div>
+      <div class="metrics">
+        <span id="kbPct">0%</span>
+        <span id="kbRate"></span>
+        <span id="kbEta"></span>
+      </div>
+    </div>
+  </section>
+
+  <!-- 通路 A：接收器（WebHID） -->
+  <section class="card panel hidden" id="panelDg">
+    <div class="card-title">
+      <span>接收器 Dongle</span>
+      <span class="hint">USB HID（VIA Raw HID 接口，EP3 32B）；进 IAP / 回 App 自动重连</span>
+    </div>
+    <div class="row">
+      <button class="btn" id="dgConnect" type="button">选择设备</button>
+      <button class="btn primary" id="dgStart" type="button" disabled>开始升级</button>
+      <button class="btn danger" id="dgAbort" type="button" disabled>中止</button>
+      <button class="btn ghost" id="dgInfo" type="button" disabled>读取设备信息</button>
+    </div>
+    <div id="dgDev" class="dev-info muted">未连接</div>
+    <div class="stages" id="dgStages"></div>
+    <div class="progress">
+      <div class="bar"><div class="fill" id="dgFill"></div></div>
+      <div class="metrics">
+        <span id="dgPct">0%</span>
+        <span id="dgRate"></span>
+        <span id="dgEta"></span>
+      </div>
+    </div>
+    <p class="hint">提示：首次使用需在弹窗中授权设备；此后重连由网页自动完成，无需再次选择。</p>
+  </section>
+
+  <!-- 日志 -->
+  <section class="card">
+    <div class="card-title">
+      <span>日志</span>
+      <span class="log-actions">
+        <button class="btn ghost small" id="logCopy" type="button">复制</button>
+        <button class="btn ghost small" id="logClear" type="button">清空</button>
+      </span>
+    </div>
+    <div id="logBox" class="log"></div>
+  </section>
+
+</main>
+
+<script src="js/crc16.js"></script>
+<script src="js/frame.js"></script>
+<script src="js/serial_ota.js"></script>
+<script src="js/hid_ota.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

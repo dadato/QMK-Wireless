@@ -1,7 +1,7 @@
 /* 主机验证用板级配置（test_host）—— 仅供 PC 端编译 core/ + port/ch58x 使用
  *
- * 保真约定：本文件按角色镜像 board/keyboard/bridge_board.h 与
- *           board/dongle/bridge_board.h 的**被引用宏**，取值必须完全一致。
+ * 保真约定：本文件按角色镜像 app/keyboard/bridge_board.h 与
+ *           app/dongle/bridge_board.h 的**被引用宏**，取值必须完全一致。
  *           若在此处放宽（例如给 Dongle 也定义 MODE_SEL），
  *           port_gpio_init() 就会走一条固件上不存在的分支，
  *           主机测试即失去意义。

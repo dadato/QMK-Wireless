@@ -1,14 +1,15 @@
-/* CH58x port 层：实现 core/bridge_port.h
+/* CH58x 芯片适配层：实现 hal/bridge_port.h，并提供 app/ 层入口 bridge_chip.h
  *
  * 本文件**不含任何 SDK 头文件**，只通过 bridge_ch58x_sdk.h 访问硬件，
  * 因此可在 PC 上用 test_host/sdk_stub.c 顶替后编译运行（见 test_host/port_test.c）。
  *
- * 引脚依据：wireless/ch582f_pinmap.md 第 3/4 章，宏定义在 board/<target>/bridge_board.h。
+ * 引脚依据：wireless/ch582f_pinmap.md 第 3/4 章，宏定义在 app/<target>/bridge_board.h。
  * 时序依据：wireless/ch582m_bridge_fw_spec.md 4.1（BRIDGE_UART_BAUD=921600）、6.x。
  */
 #include <string.h>
 
 #include "bridge_port.h"
+#include "bridge_chip.h"
 #include "bridge_ch58x.h"
 #include "bridge_ch58x_sdk.h"
 #include "bridge_config.h"
@@ -715,3 +716,21 @@ void bridge_ch58x_idle(void)
         BRIDGE_DBG(0x31);
     }
 }
+
+/* ============================ 芯片入口（bridge_chip.h） ============================
+ * app/main.c 只依赖这两个函数，不引用任何 CH58x 专有符号。 */
+
+void bridge_chip_boot(void)
+{
+    sdk_sys_init();              /* 系统时钟等基础初始化（必须最先执行） */
+    sdk_capture_reset_cause();   /* 抓取复位源（R8_RESET_STATUS），供 CMD_HID_DIAG 上报 */
+    bridge_ch58x_init();         /* 射频/协议栈 + USB(接收器) + core 初始化 */
+}
+
+void bridge_chip_poll(void)
+{
+    bridge_ch58x_loop();
+    sdk_usb_poll();              /* USB 远程唤醒：重枚举完成后补发唤醒前的按键（模组侧空实现） */
+    bridge_ch58x_idle();
+}
+

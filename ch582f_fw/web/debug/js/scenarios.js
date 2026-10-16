@@ -1,6 +1,6 @@
 /* 场景用例 —— 镜像 tools/sk32sim/scenarios.py
  *
- * 每个场景逐项输出 PASS/FAIL 明细；ota 场景不实现 FW_*，仅提示跳转 board/ota_web。
+ * 每个场景逐项输出 PASS/FAIL 明细；ota 场景不实现 FW_*，仅提示跳转 web/ota。
  * 约定：run(c, link, ch, opts)（c=Commands，link=Link，ch=Checks）。
  */
 (function (global) {
@@ -201,7 +201,7 @@
 
   /* ---------------- ota（仅提示，不实现 FW_*） ---------------- */
   async function ota(c, link, ch) {
-    ch.note('OTA 固件升级不在本工具内实现', '请使用 board/ota_web（键盘模组 · 串口通道）进行升级');
+    ch.note('OTA 固件升级不在本工具内实现', '请使用 web/ota（键盘模组 · 串口通道）进行升级');
   }
 
   /* ---------------- unpair_all（破坏性） ---------------- */
@@ -226,7 +226,7 @@
     { id: 'typing_2g4', label: 'typing_2g4 · 2.4G 打字', hint: '需已配对；PC 端人工确认字符', destructive: false, run: typing2g4 },
     { id: 'ble', label: 'ble · 切换 BLE/广播名', hint: '打字需 PC/手机蓝牙配对后验证', destructive: false, run: ble },
     { id: 'srrc', label: 'srrc · BLE 定频', hint: '2.4G 定频不支持；需频谱仪（可选）', destructive: false, run: srrc },
-    { id: 'ota', label: 'ota · 固件升级', hint: '本工具不实现 FW_*，请改用 board/ota_web', destructive: false, run: ota },
+    { id: 'ota', label: 'ota · 固件升级', hint: '本工具不实现 FW_*，请改用 web/ota', destructive: false, run: ota },
     { id: 'unpair_all', label: 'unpair_all · 清除全部绑定', hint: '破坏性，默认不参与「全部运行」', destructive: true, run: unpairAll }
   ];
   var MAP = {};

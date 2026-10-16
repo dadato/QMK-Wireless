@@ -28,7 +28,7 @@ VID, PID, USAGE_PAGE = 0x0194, 0x0463, 0xFF60
 
 def crc16(data: bytes) -> int:
     """CRC-16/CCITT-FALSE（init 0xFFFF / poly 0x1021 / 不反转 / xorout 0），
-    与 core/bridge_crc16.c、board/ota_web/js/crc16.js 逐位一致。"""
+    与 core/bridge_crc16.c、web/ota/js/crc16.js 逐位一致。"""
     c = 0xFFFF
     for b in data:
         c ^= (b << 8) & 0xFFFF

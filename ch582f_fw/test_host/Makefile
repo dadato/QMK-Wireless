@@ -18,9 +18,10 @@ DONGLE  ?= 0
 
 ROOT    := ..
 CORE    := $(ROOT)/core
+HAL     := $(ROOT)/hal
 PORT    := $(ROOT)/port/ch58x
 
-INC     := -I$(ROOT)/test_host/board -I$(CORE) -I$(ROOT)/test_host -I$(PORT)
+INC     := -I$(ROOT)/test_host/board -I$(CORE) -I$(HAL) -I$(ROOT)/test_host -I$(PORT)
 CFLAGS  := -std=c99 -Wall -Wextra -Wno-unused-parameter -g -O1 $(INC)
 LDFLAGS :=
 

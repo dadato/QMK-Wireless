@@ -731,6 +731,8 @@ int sdk_usb_hid_send(const uint8_t *d, uint8_t len)
 
 bool sdk_usb_is_configured(void) { return s_usb_configured; }
 
+void sdk_usb_poll(void) { /* no-op：主机桩无 USB 远程唤醒 */ }
+
 int sdk_usb_tunnel_send(const uint8_t *d, uint8_t len)
 {
     /* Dongle 侧：透传经 USB Raw HID 送主机。与 HID 发送同门槛（已配置）。 */

@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CH582F 键盘模组测试/调试工具</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <h1>CH582F 键盘模组测试/调试工具</h1>
+  <div id="compat" class="compat"></div>
+</header>
+
+<main>
+
+  <!-- 连接区（各 Tab 共用） -->
+  <div class="connbar">
+    <button id="portBtn" class="btn primary" type="button">选择串口</button>
+    <span id="portInfo" class="dev muted">未连接</span>
+    <span class="sep"></span>
+    <label class="field" title="模组 UART1 协议默认 921600 8N1；连接后锁定，断开后可改">波特率
+      <select id="baudSel">
+        <option value="19200">19200</option>
+        <option value="38400">38400</option>
+        <option value="43000">43000</option>
+        <option value="57600">57600</option>
+        <option value="76800">76800</option>
+        <option value="115200">115200</option>
+        <option value="128000">128000</option>
+        <option value="230400">230400</option>
+        <option value="460800">460800</option>
+        <option value="921600" selected>921600</option>
+        <option value="1843200">1843200</option>
+        <option value="3686400">3686400</option>
+        <option value="7372800">7372800</option>
+      </select>
+    </label>
+    <span class="sep"></span>
+    <span id="linkHealth" class="health"><span class="dot" id="healthDot"></span>链路：未连接</span>
+    <span class="sep"></span>
+    <span id="verText" class="dev muted">版本 --</span>
+    <span class="sep"></span>
+    <button id="refreshBtn" class="btn ghost small" type="button">刷新状态</button>
+  </div>
+
+  <!-- Tab 切换 -->
+  <div class="tabs" role="tablist">
+    <button class="tab active" data-panel="panelStatus" role="tab">状态</button>
+    <button class="tab" data-panel="panelMonitor" role="tab">监视器</button>
+    <button class="tab" data-panel="panelConsole" role="tab">命令台</button>
+    <button class="tab" data-panel="panelHid" role="tab">HID 模拟</button>
+    <button class="tab" data-panel="panelScenarios" role="tab">场景</button>
+    <button class="tab" data-panel="panelVia" role="tab">VIA 测试</button>
+    <button class="tab" data-panel="panelLog" role="tab">日志</button>
+  </div>
+
+  <!-- Tab｜状态 -->
+  <section class="card panel" id="panelStatus">
+    <div class="card-title">
+      <span>状态仪表盘</span>
+      <span class="hint">USB-TTL 直连模组 UART1（PA8/PA9），921600 8N1；事件驱动自动更新</span>
+    </div>
+    <div class="grid">
+      <div class="stat" id="statVersion"><div class="k">版本</div><div class="v small" id="stVersion">--</div></div>
+      <div class="stat" id="statMac"><div class="k">MAC</div><div class="v small" id="stMac">--</div></div>
+      <div class="stat" id="statAdc"><div class="k">ADC</div><div class="v" id="stAdc">--</div></div>
+      <div class="stat" id="statMode"><div class="k">模式</div><div class="v" id="stMode">--</div></div>
+      <div class="stat" id="statConn"><div class="k">连接态</div><div class="v" id="stConnected">--</div></div>
+      <div class="stat" id="statProfile"><div class="k">BLE 槽位</div><div class="v" id="stProfile">--</div></div>
+      <div class="stat" id="statBleSlots"><div class="k">BLE 槽绑定</div><div class="v small" id="stBleSlots">--</div></div>
+      <div class="stat" id="statBattery"><div class="k">电量</div><div class="v" id="stBattery">--</div></div>
+      <div class="stat" id="statLeds"><div class="k">LED</div><div class="v small" id="stLeds">--</div></div>
+    </div>
+    <div class="card-title" style="margin-top:16px"><span>统计计数</span></div>
+    <div class="grid">
+      <div class="stat"><div class="k">TX 帧</div><div class="v" id="cTx">0</div></div>
+      <div class="stat"><div class="k">RX 帧</div><div class="v" id="cRx">0</div></div>
+      <div class="stat"><div class="k">CRC 错</div><div class="v" id="cCrc">0</div></div>
+      <div class="stat"><div class="k">超时</div><div class="v" id="cTimeout">0</div></div>
+      <div class="stat"><div class="k">ERR</div><div class="v" id="cErr">0</div></div>
+      <div class="stat"><div class="k">事件</div><div class="v" id="cEvt">0</div></div>
+      <div class="stat"><div class="k">PONG</div><div class="v" id="cPong">0</div></div>
+    </div>
+  </section>
+
+  <!-- Tab｜监视器 -->
+  <section class="card panel hidden" id="panelMonitor">
+    <div class="card-title">
+      <span>帧监视器</span>
+      <span class="hint">最新在下 · 点击行展开帧级详情 · CRC 错误行红色高亮</span>
+    </div>
+    <div class="mon-toolbar">
+      <button id="monPause" class="btn small" type="button">暂停</button>
+      <button id="monClear" class="btn ghost small" type="button">清空</button>
+      <button id="monExportTxt" class="btn ghost small" type="button">导出 TXT</button>
+      <button id="monExportJson" class="btn ghost small" type="button">导出 JSON</button>
+      <label class="field">类型
+        <select id="monType">
+          <option value="ALL">全部</option>
+          <option value="TX">TX</option>
+          <option value="RX">RX</option>
+          <option value="ACK">ACK</option>
+          <option value="ERR">ERR</option>
+          <option value="EVT">EVT</option>
+          <option value="CRC">CRC</option>
+        </select>
+      </label>
+      <input type="text" id="monText" placeholder="关键字过滤…">
+      <span id="monCount" class="hint">0 帧</span>
+    </div>
+    <div id="monList" class="mon-list"></div>
+    <div id="monEmpty" class="hint">暂无帧（连接串口并收发后显示）</div>
+  </section>
+
+  <!-- Tab｜命令台 -->
+  <section class="card panel hidden" id="panelConsole">
+    <div class="card-title">
+      <span>命令台</span>
+      <span class="hint">全命令表单（自动递增 SEQ）· 危险操作二次确认</span>
+    </div>
+    <div id="localHbBar" style="margin:4px 0 10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <label class="chk" title="单向心跳：桥每 1s 发 PING，Web 回 PONG 即保活。勾选（默认）后 Web 不再主动发 CMD_PING；仅影响本端，不改桥侧 SET_HEARTBEAT 状态">
+        <input type="checkbox" id="localHbToggle" checked>停发本机心跳
+      </label>
+      <span class="hint" id="localHbHint">本机（Web）侧心跳：默认停发（单向，回 PONG 即保活）</span>
+    </div>
+    <div id="cmdGroups"></div>
+
+    <div class="cmd-item" style="margin-top:6px">
+      <div class="cmd-head"><span class="lbl">原始帧编辑器</span><span class="code">任意 CMD / SEQ / FLAGS / PAYLOAD</span></div>
+      <div class="cmd-desc">用于非常规或负向测试；可手动指定 SEQ，可选是否按 (cmd,seq) 等待应答。</div>
+      <div class="cmd-fields">
+        <label class="f">CMD(hex)<input type="text" id="rawCmd" class="hex" value="02"></label>
+        <label class="f">SEQ(hex)<input type="text" id="rawSeq" class="hex" value="00"></label>
+        <label class="f">FLAGS(hex)<input type="text" id="rawFlags" class="hex" value="00"></label>
+        <label class="f">PAYLOAD(hex)<input type="text" id="rawPayload" class="hex" value=""></label>
+        <label class="chk"><input type="checkbox" id="rawWaitAck">等待应答</label>
+      </div>
+      <div class="row">
+        <button id="rawSend" class="btn" type="button">组帧发送</button>
+        <button id="rawRelease" class="btn ghost small" type="button">HID_RELEASE（全键释放）</button>
+      </div>
+      <div id="rawResult" class="cmd-result"></div>
+    </div>
+  </section>
+
+  <!-- Tab｜HID 模拟 -->
+  <section class="card panel hidden" id="panelHid">
+    <div class="card-title">
+      <span>HID 数据流模拟</span>
+      <span class="hint">经射频（BLE/2.4G）送出，无 ACK；相同报文会被固件去重（DUP）</span>
+    </div>
+    <div class="subtabs">
+      <button class="subtab active" data-sub="subType">文本打字</button>
+      <button class="subtab" data-sub="subReport">报文构造器</button>
+      <button class="subtab" data-sub="subMacro">宏 / 序列</button>
+      <button class="subtab" data-sub="subStress">压力测试</button>
+    </div>
+
+    <!-- 文本打字 -->
+    <div class="hid-panel" id="subType">
+      <textarea id="hidText" rows="3" placeholder="输入要打字的文本…">Hello, CH582F!</textarea>
+      <div class="row">
+        <label class="field">字符/秒<input type="number" id="hidRate" value="12" min="1" max="200"></label>
+        <label class="field">按键保持(ms)<input type="number" id="hidHold" value="15" min="1" max="500"></label>
+        <label class="chk"><input type="checkbox" id="hidWaitReady" checked>等链路就绪</label>
+        <button id="hidTypeSend" class="btn primary small" type="button">开始打字</button>
+        <label class="field" title="点击开始打字后先等待该时长再发送字符，便于切换到目标窗口；0 表示不延迟">触发延迟(ms)<input type="number" id="hidTypeDelay" value="0" min="0" max="60000"></label>
+        <button id="hidTypeStop" class="btn danger small" type="button" disabled>停止</button>
+      </div>
+      <div id="hidTypeResult" class="progress-line"></div>
+    </div>
+
+    <!-- 报文构造器 -->
+    <div class="hid-panel hidden" id="subReport">
+      <div>
+        <div class="hint">键盘 · 修饰键</div>
+        <div class="modrow" id="hidMods"></div>
+      </div>
+      <div>
+        <div class="hint">键盘 · 按键 usage（最多 6 个，如 0x04='a'）</div>
+        <div class="cmd-fields" id="hidKeys"></div>
+        <div class="row">
+          <button id="hidKbSend" class="btn small" type="button">发送 HID_KEYBOARD</button>
+          <button id="hidKbClear" class="btn ghost small" type="button">清空</button>
+        </div>
+      </div>
+      <div>
+        <div class="hint">NKRO · 16B 位图（bit n → usage n+4；勾选 usage）</div>
+        <div class="keygrid" id="hidNkroGrid"></div>
+        <div class="row">
+          <button id="hidNkroSend" class="btn small" type="button">发送 HID_NKRO</button>
+          <button id="hidNkroClear" class="btn ghost small" type="button">清空位图</button>
+        </div>
+      </div>
+      <div class="cmd-fields">
+        <label class="f">多媒体(2B hex)<input type="text" id="hidConsumer" class="hex" value="0000"></label>
+        <button id="hidConsumerSend" class="btn small" type="button">发送 HID_CONSUMER</button>
+        <label class="f">系统键(hex)<input type="text" id="hidSystem" class="hex" value="00"></label>
+        <button id="hidSystemSend" class="btn small" type="button">发送 HID_SYSTEM</button>
+      </div>
+      <div class="cmd-fields">
+        <div class="f">鼠标按键
+          <div class="modrow">
+            <label class="chk"><input type="checkbox" id="hidMouseBtn0">左</label>
+            <label class="chk"><input type="checkbox" id="hidMouseBtn1">右</label>
+            <label class="chk"><input type="checkbox" id="hidMouseBtn2">中</label>
+          </div>
+        </div>
+        <label class="f">dx<input type="number" id="hidDx" value="0" min="-128" max="127"></label>
+        <label class="f">dy<input type="number" id="hidDy" value="0" min="-128" max="127"></label>
+        <label class="f">wheel<input type="number" id="hidWheel" value="0" min="-128" max="127"></label>
+        <button id="hidMouseSend" class="btn small" type="button">发送 HID_MOUSE</button>
+      </div>
+      <div class="row">
+        <button id="hidReleaseBtn" class="btn danger small" type="button">一键 HID_RELEASE（全键释放）</button>
+      </div>
+      <div id="hidReportResult" class="progress-line"></div>
+    </div>
+
+    <!-- 宏 / 序列 -->
+    <div class="hid-panel hidden" id="subMacro">
+      <div class="hint">行式脚本：tap &lt;usage&gt; [holdms] · down &lt;usage&gt; · up &lt;usage&gt; · delay &lt;100ms&gt; · release（# 为注释）</div>
+      <textarea id="hidMacro" class="mono" rows="6"># 示例：敲 a s d，再按 LShift，最后释放
+tap 0x04 20ms
+tap 0x16 20ms
+tap 0x07 20ms
+down 0xE1
+tap 0x04 40ms
+up 0xE1
+release</textarea>
+      <div class="row">
+        <label class="field">循环次数<input type="number" id="hidMacroLoop" value="1" min="1" max="1000"></label>
+        <button id="hidMacroRun" class="btn primary small" type="button">运行脚本</button>
+        <button id="hidMacroStop" class="btn danger small" type="button" disabled>停止</button>
+      </div>
+      <div id="hidMacroResult" class="progress-line"></div>
+    </div>
+
+    <!-- 压力测试 -->
+    <div class="hid-panel hidden" id="subStress">
+      <div class="row">
+        <label class="field">按键 usages(hex,逗号分隔)<input type="text" id="hidStressUsages" class="hex" value="04,05,06" style="width:180px"></label>
+        <label class="field">目标 keys/s<input type="number" id="hidStressRate" value="10" min="1" max="500"></label>
+        <label class="field">模式
+          <select id="hidStressMode"><option value="time">持续时长</option><option value="count">次数</option></select>
+        </label>
+        <label class="field">时长(s)<input type="number" id="hidStressSeconds" value="5" min="1" max="600"></label>
+        <label class="field">次数<input type="number" id="hidStressCount" value="100" min="1" max="100000"></label>
+        <label class="field">保持(ms)<input type="number" id="hidStressHold" value="10" min="1" max="500"></label>
+      </div>
+      <div class="row">
+        <button id="hidStressRun" class="btn primary small" type="button">开始压力测试</button>
+        <button id="hidStressStop" class="btn danger small" type="button" disabled>停止</button>
+      </div>
+      <div id="hidStressResult" class="progress-line"></div>
+    </div>
+  </section>
+
+  <!-- Tab｜场景 -->
+  <section class="card panel hidden" id="panelScenarios">
+    <div class="card-title">
+      <span>场景用例（镜像 sk32sim/scenarios.py）</span>
+      <span class="hint">逐项 PASS/FAIL · 破坏性场景默认不参与「全部运行」</span>
+    </div>
+    <div class="row" style="margin-bottom:12px">
+      <button id="scnRunAll" class="btn primary" type="button">全部运行（非破坏性）</button>
+      <span id="scnSummary" class="hint"></span>
+    </div>
+    <div class="scn-list" id="scnList"></div>
+  </section>
+
+  <!-- Tab｜VIA 测试 -->
+  <section class="card panel hidden" id="panelVia">
+    <div class="card-title">
+      <span>VIA 隧道回路测试</span>
+      <span class="hint">网页 → 蓝牙/2.4G → 模组 → UART → SK32 → 回程（32B 裸透传，无 report ID / status 字节）</span>
+    </div>
+
+    <div class="cmd-item">
+      <div class="cmd-head"><span class="lbl">自检报文</span><span class="code">GET_PROTOCOL_VERSION 往返</span></div>
+      <div class="cmd-desc">发送 32B 报文：byte0=0x01（id_get_protocol_version）、byte1=0x00、byte2=0x0D（VIA_PROTOCOL_VERSION=0x000D），其余补零；期望 SK32 VIA 原样回发，byte0=0x01、byte1=0x00、byte2=0x0D。首字节 0x01 天然避开 Dongle 对首 3 字节 “OTA” 的 OTA 拦截。</div>
+      <div class="cmd-fields">
+        <label class="f">TX(32B)<input type="text" id="viaTxHex" class="hex mono" readonly></label>
+        <label class="f">超时(ms)<input type="number" id="viaTimeout" value="3000" min="100" max="10000"></label>
+        <label class="f">重试次数<input type="number" id="viaRetries" value="2" min="0" max="5"></label>
+      </div>
+    </div>
+
+    <!-- 设备标识：通路 A/B 共用的 WebHID 过滤器，可自由填写 -->
+    <div class="cmd-item">
+      <div class="cmd-head"><span class="lbl">设备标识｜WebHID 过滤器（通路 A / B 共用）</span></div>
+      <div class="cmd-desc">配置通路 A（Dongle）与通路 B（BLE 模组）调用 <code>navigator.hid.requestDevice</code> 时使用的 VID / PID 过滤器，可自由填写以匹配任意设备。输入为 1~4 位十六进制（可带或不带 <code>0x</code> 前缀）。修改后重新点击「连接 Dongle / 连接 BLE 模组」即生效。</div>
+      <div class="cmd-fields">
+        <label class="f">VID<input type="text" id="viaVid" class="hex mono" value="0x0194"></label>
+        <label class="f">PID<input type="text" id="viaPid" class="hex mono" value="0x0464"></label>
+      </div>
+    </div>
+
+    <!-- 通路 C：LD7 键盘 VIA 数据模拟（经串口扮演 SK32/LD7） -->
+    <div class="cmd-item">
+      <div class="cmd-head">
+        <span class="lbl">通路 C｜LD7 键盘 VIA 数据模拟（经串口扮演 SK32/LD7）</span>
+        <span class="scn-badge" id="simState">未启用</span>
+      </div>
+      <div class="cmd-desc">网页直接<b>扮演 LD7 键盘（SK32/QMK VIA）</b>应答桌面 VIA，无需真实 SK32。桌面 VIA 经<b>蓝牙（HOGP RID5）或 2.4G（Dongle RID0）</b>到模组 → 模组把 VIA Raw HID 经 UART 转成 <code>EVT_TUNNEL_BLE(0x86)/EVT_TUNNEL_USB(0x85)</code> → 本页通过串口（WebSerial）接收并应答 <code>CMD_TUNNEL_BLE(0x19)/CMD_TUNNEL_USB(0x18)</code>。镜像 <code>quantum/via.c</code>（协议版本 0x000D）、LD7 键位（1×7 = Z X C V A LCTL ENTER、4 层）与 <code>qmk_rgb_matrix</code> 自定义值。模拟状态保存在浏览器 localStorage，改动可跨刷新保留。</div>
+      <div class="row">
+        <button id="simToggle" class="btn" type="button">启用模拟</button>
+        <button id="simReset" class="btn ghost small" type="button">重置为 LD7 默认</button>
+        <button id="simPing" class="btn ghost small" type="button">自检 GET_PROTOCOL_VERSION</button>
+      </div>
+      <div id="simResult" class="cmd-result"></div>
+      <div id="simSnapshot" class="cmd-result"></div>
+    </div>
+
+    <!-- 通路 A：WebHID → 接收器 Dongle → 2.4G -->
+    <div class="cmd-item">
+      <div class="cmd-head">
+        <span class="lbl">通路 A｜WebHID → 接收器 Dongle → 2.4G</span>
+        <span class="scn-badge" id="viaHidState">未连接</span>
+      </div>
+      <div class="cmd-desc">选择 2.4G 接收器（usagePage 0xFF60 的 VIA Raw HID 接口，VID/PID 取上方「设备标识」输入，默认 0x0194 / 0x0464，无 Report ID）。下行 EP3 OUT → 2.4G → 键盘模组 → UART EVT_TUNNEL_USB(0x85) → SK32 raw_hid_receive；上行原路返回。</div>
+      <div class="row">
+        <button id="viaHidConn" class="btn" type="button">连接 Dongle</button>
+        <button id="viaHidRun" class="btn primary small" type="button" disabled>运行自检</button>
+        <button id="viaHidDiag" class="btn small" type="button" disabled>读取 2.4G 诊断</button>
+      </div>
+      <div id="viaHidResult" class="cmd-result"></div>
+      <div id="viaHidDiagResult" class="cmd-result"></div>
+    </div>
+
+    <!-- 通路 B：WebHID → 键盘模组 BLE（HOGP vendor RID 5） -->
+    <div class="cmd-item">
+      <div class="cmd-head">
+        <span class="lbl">通路 B｜WebHID → 键盘模组 BLE（HOGP RID 5）</span>
+        <span class="scn-badge" id="viaBleState">未连接</span>
+      </div>
+      <div class="cmd-desc">先在系统蓝牙里配对键盘，再在此选择键盘模组（usagePage 0xFF60 的 HOGP vendor 集合，VID/PID 取上方「设备标识」输入，默认 0x0194 / 0x0464，Report ID 5）。下行写 vendor OUT → 模组 → UART EVT_TUNNEL_BLE(0x86) → SK32 raw_hid_receive；上行经 vendor IN 通知返回。<br>注意：两条通路 VID/PID 现已相同（均为 LD7 键盘标识），浏览器选择框会同时列出二者，靠 Report ID 区分（Dongle=RID0 / BLE=RID5）。<br>模组 BLE HID 服务注册取证（RID5 IN/OUT 属性 handle 等）可在「命令台」执行 HID_DIAG(0x2B)（需串口直连模组）。</div>
+      <div class="row">
+        <button id="viaBleConn" class="btn" type="button">连接 BLE 模组</button>
+        <button id="viaBleRun" class="btn primary small" type="button" disabled>运行自检</button>
+      </div>
+      <div id="viaBleResult" class="cmd-result"></div>
+    </div>
+
+    <!-- 批量稳定性测试：对已连接通路连续做 N 次 VIA 自检往返 -->
+    <div class="cmd-item">
+      <div class="cmd-head">
+        <span class="lbl">批量稳定性测试（通路 A / B）</span>
+        <span class="scn-badge" id="viaSoakState">空闲</span>
+      </div>
+      <div class="cmd-desc">对已连接通路连续做 N 次 VIA 自检往返（报文内嵌 LE16 序号，用于识别丢包/错序/重复）。<b>严格单发、不重试</b>：超时即计丢包；回包序号不匹配则计错序/重复。统计成功次数、丢包率与 RTT 最小/均值/中位/P95/P99/最大、用时与速率。默认 10000 次。</div>
+      <div class="cmd-fields">
+        <label class="f">测试次数<input type="number" id="viaSoakCount" value="10000" min="1" max="200000"></label>
+        <label class="f">间隔(ms)<input type="number" id="viaSoakGap" value="1" min="0" max="5000"></label>
+        <label class="f">单次超时(ms)<input type="number" id="viaSoakTimeout" value="800" min="100" max="10000"></label>
+      </div>
+      <div class="row">
+        <button id="viaSoakRunA" class="btn primary small" type="button" disabled>测通路 A（2.4G）</button>
+        <button id="viaSoakRunB" class="btn primary small" type="button" disabled>测通路 B（BLE）</button>
+        <button id="viaSoakStop" class="btn danger small" type="button" disabled>停止</button>
+      </div>
+      <div class="progress-wrap">
+        <div class="progress-bar"><div class="progress-fill" id="viaSoakBar"></div></div>
+        <div class="progress-line" id="viaSoakProgress">0 / 0</div>
+      </div>
+      <div id="viaSoakResult" class="cmd-result"></div>
+    </div>
+  </section>
+
+  <!-- Tab｜日志 -->
+  <section class="card panel hidden" id="panelLog">
+    <div class="card-title">
+      <span>日志</span>
+      <span class="log-actions">
+        <label class="field">级别
+          <select id="logLevelFilter">
+            <option value="ALL">全部</option>
+            <option value="INFO">INFO</option>
+            <option value="OK">OK</option>
+            <option value="WARN">WARN</option>
+            <option value="ERR">ERR</option>
+          </select>
+        </label>
+        <button class="btn ghost small" id="logCopy" type="button">复制</button>
+        <button class="btn ghost small" id="logDownload" type="button">下载</button>
+        <button class="btn ghost small" id="logClear" type="button">清空</button>
+      </span>
+    </div>
+    <div id="logBox" class="log"></div>
+  </section>
+
+</main>
+
+<script src="js/crc16.js?v=2"></script>
+<script src="js/frame.js?v=2"></script>
+<script src="js/decode.js?v=2"></script>
+<script src="js/link.js?v=2"></script>
+<script src="js/commands.js?v=2"></script>
+<script src="js/hid_sim.js?v=2"></script>
+<script src="js/scenarios.js?v=2"></script>
+<script src="js/monitor.js?v=2"></script>
+<script src="js/via_test.js?v=2"></script>
+<script src="js/via_sim.js?v=2"></script>
+<script src="js/app.js?v=2"></script>
+</body>
+</html>

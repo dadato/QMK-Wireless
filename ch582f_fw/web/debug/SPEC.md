@@ -7,7 +7,7 @@
 | 日期 | 2026-10-07 |
 | 状态 | 待确认（Phase 1） |
 | 适用固件 | `wireless/ch582f_fw`（keyboard 目标，CH582F） |
-| 参考同类 | `board/ota_web`（OTA 升级，已完成）；`tools/sk32sim`（Python 命令行同源工具） |
+| 参考同类 | `web/ota`（OTA 升级，已完成）；`tools/sk32sim`（Python 命令行同源工具） |
 
 ---
 
@@ -24,7 +24,7 @@
 - **回路验证**：经 WebHID（Dongle，RID 0）与 WebHID（模组 BLE，HOGP RID 0 隐式）做 VIA 透传往返，验证
   「网页 → 蓝牙/2.4G → 模组 → UART → SK32」完整回路（§5.8）。
 
-**不在范围内**：OTA 固件升级（见 `board/ota_web`）；SK32/QMK 侧固件改动；
+**不在范围内**：OTA 固件升级（见 `web/ota`）；SK32/QMK 侧固件改动；
 量产烧录（`WCHISPTool`）；射频（2.4G/BLE）端的真实输入验证（本工具只覆盖命令/事件层，
 射频输出需 PC/手机侧人工或外部捕获确认）。
 
@@ -104,7 +104,7 @@ CH582F 模组 UART1 (PA8=RXD1 / PA9=TXD1)
 ### 4.3 CRC
 
 - `CRC-16/CCITT-FALSE`：init `0xFFFF`、poly `0x1021`、不反转、xorout 0。
-- 与 [proto.py `crc16_ccitt`](file:///c:/Users/Administrator/Desktop/qmk/qmk_firmware/wireless/ch582f_fw/tools/sk32sim/proto.py#L244-L247) 及 [ota_web/js/crc16.js](file:///c:/Users/Administrator/Desktop/qmk/qmk_firmware/wireless/ch582f_fw/board/ota_web/js/crc16.js) 一致，可直接复用。
+- 与 [proto.py `crc16_ccitt`](file:///c:/Users/Administrator/Desktop/qmk/qmk_firmware/wireless/ch582f_fw/tools/sk32sim/proto.py#L244-L247) 及 [ota_web/js/crc16.js](file:///c:/Users/Administrator/Desktop/qmk/qmk_firmware/wireless/ch582f_fw/web/ota/js/crc16.js) 一致，可直接复用。
 
 ### 4.4 帧标志（FLAGS）
 
@@ -155,7 +155,7 @@ CH582F 模组 UART1 (PA8=RXD1 / PA9=TXD1)
 | `GET_DIAG` | `0x2A` | — | `[0]up [1]conn [2]bound [3]tx_busy [4]tx_q_cnt [5]hb_miss [6..7]report_period [8..9]tx_submit_ok [10..11]tx_submit_fail [12..13]tx_done_ok [14..15]tx_done_fail [16..17]tx_drop [18..19]rx_any [20..21]rx_pair [22..23]rx_data_bad`（`[6..23]` 均 LE16） | 2.4G 射频诊断快照（24B，排障用） |
 | `HID_DIAG` | `0x2B` | — | `[0]reg [1..2]hid_handle [3..4]map_handle [5..6]raw_in_handle [7..8]raw_out_handle [9]report_cnt [10]attr_cnt [11]reset_src [12]stage_prev [13]stage_now [14..17]notify_fail [18..21]notify_retry_ok [22..25]notify_retry_drop`（`[1..8]` 均 LE16；`[14..25]` 均 uint32 LE） | BLE HID 服务注册取证（26B，排障用）：`reg`=`GATTServApp_RegisterService` 返回值（`0`=成功/`0xFF`=未调用）；`raw_in/out_handle`=RID0 IN/OUT 属性 handle；`[14..25]` 为出站 notify 计数（`HidDev_Report` 失败 / 延迟重发成功 / 延迟重发仍失败）；仅键盘模组支持，Dongle 侧 → `ERR(STATE)` |
 | `PING` | `0x7F` | — | `EVT_PONG`（`flags=ACK`） | 心跳/往返 |
-| `FW_BEGIN/DATA/END/ABORT` | `0x21~0x24` | 见 [ota_web SPEC §4.6](file:///c:/Users/Administrator/Desktop/qmk/qmk_firmware/wireless/ch582f_fw/board/ota_web/SPEC.md) | — | 仅保留「调试/引用」，升级流程由 `ota_web` 承担 |
+| `FW_BEGIN/DATA/END/ABORT` | `0x21~0x24` | 见 [ota_web SPEC §4.6](file:///c:/Users/Administrator/Desktop/qmk/qmk_firmware/wireless/ch582f_fw/web/ota/SPEC.md) | — | 仅保留「调试/引用」，升级流程由 `ota_web` 承担 |
 
 ### 4.7 快速路径命令（无应答）
 
@@ -399,8 +399,8 @@ GET_STATUS  请求：AA 55 00 02 05 00                      CRC16
 
 | # | 决策项 | 结论 |
 | --- | --- | --- |
-| 1 | 应用目录名 | **`board/debug_web`** |
-| 2 | OTA 是否纳入本工具 | **不纳入**：`ota` 场景仅提示并跳转 `board/ota_web`，不在本应用内跑 `FW_*` |
+| 1 | 应用目录名 | **`web/debug`** |
+| 2 | OTA 是否纳入本工具 | **不纳入**：`ota` 场景仅提示并跳转 `web/ota`，不在本应用内跑 `FW_*` |
 | 3 | 帧层复用方式 | **复制 `ota_web` 的 `crc16.js`/`frame.js` 到 `debug_web/js/` 并扩展**（全命令/事件/错误表），两应用各自独立、无跨目录耦合 |
 | 4 | 组帧方式 | 自动递增 SEQ；原始帧编辑器允许手动指定 SEQ |
 
@@ -454,8 +454,8 @@ GET_STATUS  请求：AA 55 00 02 05 00                      CRC16
 
 - 协议与命令：[bridge_proto.h](file:///c:/Users/Administrator/Desktop/qmk/qmk_firmware/wireless/ch582f_fw/core/bridge_proto.h)、[bridge_types.h](file:///c:/Users/Administrator/Desktop/qmk/qmk_firmware/wireless/ch582f_fw/core/bridge_types.h)、[bridge_cfg.h](file:///c:/Users/Administrator/Desktop/qmk/qmk_firmware/wireless/ch582f_fw/core/bridge_cfg.h)、[bridge_mode.h](file:///c:/Users/Administrator/Desktop/qmk/qmk_firmware/wireless/ch582f_fw/core/bridge_mode.h)、[bridge_hid.h](file:///c:/Users/Administrator/Desktop/qmk/qmk_firmware/wireless/ch582f_fw/core/bridge_hid.h)
 - 同源参考实现：[tools/sk32sim](file:///c:/Users/Administrator/Desktop/qmk/qmk_firmware/wireless/ch582f_fw/tools/sk32sim)（`proto.py` / `link.py` / `client.py` / `cli.py` / `scenarios.py`）
-- 同类 Web 应用：[ota_web](file:///c:/Users/Administrator/Desktop/qmk/qmk_firmware/wireless/ch582f_fw/board/ota_web)（`index.html` / `js/frame.js` / `js/serial_ota.js`）
-- VIA 测试（§5.8）：本应用 [js/via_test.js](file:///c:/Users/Administrator/Desktop/qmk/qmk_firmware/wireless/ch582f_fw/board/debug_web/js/via_test.js)；
+- 同类 Web 应用：[ota_web](file:///c:/Users/Administrator/Desktop/qmk/qmk_firmware/wireless/ch582f_fw/web/ota)（`index.html` / `js/frame.js` / `js/serial_ota.js`）
+- VIA 测试（§5.8）：本应用 [js/via_test.js](file:///c:/Users/Administrator/Desktop/qmk/qmk_firmware/wireless/ch582f_fw/web/debug/js/via_test.js)；
   Dongle HID 描述符 [bridge_usb_ch58x.c](file:///c:/Users/Administrator/Desktop/qmk/qmk_firmware/wireless/ch582f_fw/port/ch58x/bridge_usb_ch58x.c)；
   模组 GATT 透传 [bridge_ch58x_sdk.c](file:///c:/Users/Administrator/Desktop/qmk/qmk_firmware/wireless/ch582f_fw/port/ch58x/bridge_ch58x_sdk.c)；
   SK32 桥 [bridge.c](file:///c:/Users/Administrator/Desktop/qmk/qmk_firmware/keyboards/sk32/ld7_oled/bridge.c) / [bridge_host.c](file:///c:/Users/Administrator/Desktop/qmk/qmk_firmware/keyboards/sk32/ld7_oled/bridge_host.c)；

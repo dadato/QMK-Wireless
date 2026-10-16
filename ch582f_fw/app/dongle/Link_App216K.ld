@@ -13,7 +13,7 @@ PROVIDE( _stack_size = __stack_size );
  *
  * 说明：Dongle 的 App 只负责「触发」——收到上位机 ENTER_OTA 后写 DataFlash
  * 标志（USB_IAP）并复位；收包写入 Stage 与搬运均由常驻 BOOT
- * （board/iap/iap_usb_main.c）完成。
+ * （boot/ch58x/iap_usb_main.c）完成。
  */
 MEMORY
 {

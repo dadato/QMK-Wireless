@@ -1294,7 +1294,7 @@
   updateCounters();
   setHealth('', '链路：未连接');
   log('INFO', '调试工具就绪：请选择波特率（默认 921600 8N1）并连接串口（USB-TTL 直连模组 UART1）');
-  log('INFO', '提示：使用本工具时须断开 SK32；OTA 升级请使用 board/ota_web');
+  log('INFO', '提示：使用本工具时须断开 SK32；OTA 升级请使用 web/ota');
 
   /* 调试出口：控制台可 DbgDebug.frame.encode(...) 等做离线核对 */
   window.DbgDebug = {

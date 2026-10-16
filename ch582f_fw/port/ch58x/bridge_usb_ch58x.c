@@ -39,7 +39,7 @@
 #define BRIDGE_MOD_USB "usb"
 
 /* USB 设备标识：VIA 按 (VID,PID) 匹配键盘定义，故必须与目标键盘 via.json 一致。
- * 默认取 KB17；配套 LD7_OLED 时在 board/dongle/bridge_board.h 覆盖为 0x0464。 */
+ * 默认取 KB17；配套 LD7_OLED 时在 app/dongle/bridge_board.h 覆盖为 0x0464。 */
 #ifndef BRIDGE_USB_VID
 #define BRIDGE_USB_VID 0x0194u
 #endif

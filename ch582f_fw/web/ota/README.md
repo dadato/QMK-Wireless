@@ -15,7 +15,7 @@
 - 起本地静态服务（推荐，兼容性最好）：
 
 ```powershell
-# 在 board/ota_web 目录下
+# 在 web/ota 目录下
 python -m http.server 8000
 # 浏览器打开 http://localhost:8000/
 ```
