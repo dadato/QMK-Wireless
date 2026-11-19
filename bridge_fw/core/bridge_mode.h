@@ -39,11 +39,8 @@ bool          bridge_mode_is_wireless(void);
 void          bridge_mode_set_vbus(bool present);
 bool          bridge_mode_vbus_present(void);
 
-/* GPIO MODE_SEL[1:0] 初值 → 模式 */
-uint8_t       bridge_mode_from_sel(uint8_t sel);
-
-/* 板级默认无线模式：Dongle=2G4（无 BLE），键盘=BLE。
- * 用于首次上电配置 / 睡眠唤醒 / VBUS 拔出后的回退目标。 */
+/* 板级上电缺省模式：Dongle=2G4（无 BLE），键盘=USB（射频关闭，等 SK32 命令）。
+ * 也用于睡眠唤醒 / VBUS 拔出后的回退目标。 */
 uint8_t       bridge_mode_default(void);
 
 /* 记忆模式 → 可恢复模式映射：配对窗口（*_PAIR）是过渡态，绝不能作为唤醒 /

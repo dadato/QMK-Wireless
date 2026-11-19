@@ -97,7 +97,7 @@ static void iap_uart_init(void)
 {
     /* PA9 = TXD1（先置高避免起始位毛刺），PA8 = RXD1。
      * PA8/PA9 是 UART1 的**默认**映射脚，无需设置 R16_PIN_ALTERNATE；
-     * 切勿误置 RB_PIN_UART1（会切到 PB12/PB13，本板为 MODE_SEL）。 */
+     * 切勿误置 RB_PIN_UART1（会切到 PB12/PB13，本板该组引脚已闲置）。 */
     GPIOA_SetBits(GPIO_Pin_9);
     GPIOA_ModeCfg(GPIO_Pin_8, GPIO_ModeIN_PU);
     GPIOA_ModeCfg(GPIO_Pin_9, GPIO_ModeOut_PP_5mA);

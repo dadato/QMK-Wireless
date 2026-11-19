@@ -44,7 +44,6 @@
 #define WB_CMD_NV_READ        0x1Bu
 #define WB_CMD_SET_BATTERY    0x1Cu   /* 下发电量：[pct u8][flags u8]（WB_BATT_FLAG_*） */
 #define WB_CMD_SLEEP          0x1Du
-#define WB_CMD_GET_ADC        0x1Eu
 #define WB_CMD_SET_NAME       0x1Fu   /* [target][name...]，target 见 WB_NAME_TARGET_* */
 #define WB_CMD_SET_USB_ID     0x20u   /* [vid LE(2)][pid LE(2)] */
 /* 键盘侧 UART OTA（WCH IAP 分区，仅键盘侧支持）：
@@ -67,7 +66,6 @@
 /* ---------------- events: bridge -> SK32 ---------------- */
 #define WB_EVT_STATE          0x80u
 #define WB_EVT_LEDS           0x81u
-#define WB_EVT_BATTERY        0x82u   /* 电量上报：[mv LE(2)][pct u8][flags u8]（WB_BATT_FLAG_*） */
 #define WB_EVT_PAIR_RESULT    0x83u
 #define WB_EVT_ERROR          0x84u
 #define WB_EVT_TUNNEL_USB     0x85u
@@ -115,15 +113,9 @@
 #define WB_CFG_KEY_LOG_LEVEL     0x02u
 #define WB_CFG_KEY_ADV_NAME_MAC  0x03u
 #define WB_CFG_KEY_CONN_INTERVAL 0x04u
-#define WB_CFG_KEY_BATTERY_SRC   0x05u
 #define WB_CFG_KEY_SLEEP_POLICY  0x06u
 
-/* ---------------- battery source (WB_CFG_KEY_BATTERY_SRC) ---------------- */
-#define WB_BATT_SRC_AUTO      0u
-#define WB_BATT_SRC_LOCAL     1u
-#define WB_BATT_SRC_EXTERNAL  2u
-
-/* ---------------- battery payload flags (EVT_BATTERY / CMD_SET_BATTERY flags byte) ---------------- */
+/* ---------------- battery payload flags (CMD_SET_BATTERY flags byte) ---------------- */
 #define WB_BATT_FLAG_CHARGING 0x01u   /* bit0: charging */
 
 /* ---------------- sleep policy (WB_CFG_KEY_SLEEP_POLICY) ---------------- */

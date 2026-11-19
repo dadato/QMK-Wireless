@@ -168,16 +168,6 @@ void bridge_evt_leds(uint8_t led_state)
     (void)bridge_proto_send_event(EVT_LEDS, &led_state, 1u);
 }
 
-void bridge_evt_battery(uint16_t mv, uint8_t percent, uint8_t flags)
-{
-    uint8_t p[4];
-    p[0] = (uint8_t)(mv & 0xFFu);
-    p[1] = (uint8_t)((mv >> 8) & 0xFFu);
-    p[2] = percent;
-    p[3] = flags;   /* BRIDGE_BATT_FLAG_*，bit0 = 充电中 */
-    (void)bridge_proto_send_event(EVT_BATTERY, p, (uint8_t)sizeof(p));
-}
-
 void bridge_evt_pair_result(uint8_t result, uint8_t profile)
 {
     uint8_t p[2] = { result, profile };
@@ -563,7 +553,8 @@ static void handle_nv_read(const bridge_frame_t *f)
 }
 
 /* 下发电量（0x87）：payload [pct u8][flags u8]（flags bit0 = 充电中）。
- * SK32 自算的 0..100 优先于模组本地 ADC；flags 为可选（旧版单字节仍接受）。 */
+ * 模组不做本地采样，该命令是电量与充电状态的唯一来源；
+ * flags 为可选（旧版单字节仍接受，按未充电处理）。 */
 static void handle_set_battery(const bridge_frame_t *f)
 {
     if (f->len < 1u) {
@@ -632,37 +623,6 @@ static void handle_sleep_cfg(const bridge_frame_t *f)
     } else {
         bridge_proto_error(f->seq, f->cmd, BRIDGE_ECODE_PARAM);
     }
-}
-
-/* 电量上报配置（0x26）：payload [enable][on_change][period_s]，各 1 字节。
- *   enable    = EVT_BATTERY 总开关，0 = 关 / 1 = 开；
- *   on_change = 电量变化时立即上报，0 = 关 / 1 = 开；
- *   period_s  = 定时上报周期，单位 S，0 = 关闭定时上报。
- * 落盘保存（bridge_cfg）；EVT_BATTERY 仅在 battery_src = LOCAL（本地 ADC）时才会上报。
- * 应答 ACK / ERR PARAM。 */
-static void handle_battery_cfg(const bridge_frame_t *f)
-{
-    if (f->len != 3u) {
-        bridge_proto_error(f->seq, f->cmd, BRIDGE_ECODE_PARAM);
-        return;
-    }
-    int rc = bridge_cfg_set_batt_report(f->payload[0], f->payload[1], f->payload[2]);
-    if (rc == BRIDGE_OK) {
-        bridge_proto_ack(f->seq, f->cmd);
-    } else {
-        bridge_proto_error(f->seq, f->cmd, BRIDGE_ECODE_PARAM);
-    }
-}
-
-/* 按需采集 ADC（0x4D）：应答 2B 小端毫伏值（与市售模组 0x22 上报同格式） */
-static void handle_get_adc(const bridge_frame_t *f)
-{
-    uint16_t mv = port_bat_read_mv();
-    uint8_t  p[2];
-
-    p[0] = (uint8_t)(mv & 0xFFu);
-    p[1] = (uint8_t)((mv >> 8) & 0xFFu);
-    bridge_proto_reply(f->seq, f->cmd, p, (uint8_t)sizeof(p));
 }
 
 /* ---------------- 名称 / USB 标识（CMD_SET_NAME 0x1F / CMD_SET_USB_ID 0x20） ----------------
@@ -883,8 +843,6 @@ int bridge_proto_dispatch(const bridge_frame_t *frame)
         case CMD_SET_BATTERY:  handle_set_battery(frame);      return BRIDGE_OK;
         case CMD_SLEEP:        handle_sleep(frame);            return BRIDGE_OK;
         case CMD_SLEEP_CFG:    handle_sleep_cfg(frame);        return BRIDGE_OK;
-        case CMD_BATTERY_CFG:  handle_battery_cfg(frame);      return BRIDGE_OK;
-        case CMD_GET_ADC:      handle_get_adc(frame);          return BRIDGE_OK;
         case CMD_SET_NAME:     handle_set_name(frame);         return BRIDGE_OK;
         case CMD_SET_USB_ID:   handle_set_usb_id(frame);       return BRIDGE_OK;
 

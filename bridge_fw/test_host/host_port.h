@@ -82,9 +82,6 @@ const uint8_t *host_fw_data(uint32_t *len);
 
 /* ---- GPIO / 电源 ---- */
 void     host_set_vbus(bool present);
-void     host_set_mode_sel(uint8_t sel);
-void     host_set_bat_mv(uint16_t mv);
-void     host_set_charger(bool active);
 uint32_t host_reset_count(void);
 uint32_t host_bootloader_count(void);
 

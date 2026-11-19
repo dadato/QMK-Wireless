@@ -91,9 +91,6 @@ class BridgeClient:
     def set_conn_interval(self, units_1p25ms: int) -> None:
         self.set_config(proto.CFG_KEY_CONN_INTERVAL, bytes([units_1p25ms]))
 
-    def set_battery_src(self, src: int) -> None:
-        self.set_config(proto.CFG_KEY_BATTERY_SRC, bytes([src]))
-
     def set_sleep_policy(self, policy: int) -> None:
         """SET_CONFIG key 0x06：0=AUTO（自动休眠）/ 1=MANUAL（仅指令休眠）。"""
         self.set_config(proto.CFG_KEY_SLEEP_POLICY, bytes([policy]))
@@ -101,10 +98,6 @@ class BridgeClient:
     def set_heartbeat(self, enable: bool) -> None:
         """心跳周期开关（0x0D）：关闭后不发 PING、不做失联判定、不回 PONG。"""
         self.link.request(proto.CMD_SET_HEARTBEAT, bytes([1 if enable else 0]))
-
-    def get_adc_mv(self) -> int:
-        p = self.link.request(proto.CMD_GET_ADC).payload
-        return p[0] | (p[1] << 8)
 
     def set_battery(self, percent: int, charging: bool = False) -> None:
         """下发电量（0x1C）：[pct u8][flags u8]，flags bit0 = 充电中。"""

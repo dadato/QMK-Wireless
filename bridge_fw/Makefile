@@ -57,7 +57,7 @@ endif
 include $(CHIP_MK)
 
 # 交叉工具链前缀：MounRiver Studio 新版为 riscv-wch-elf- ；旧版/开源版为
-# riscv-none-elf- / riscv-none-embed-
+# riscv-none-elf- / riscv-none-embed-。ARM 芯片（如 fr2012a）在 port.mk 里覆盖。
 CROSS     ?= riscv-wch-elf-
 CC        := $(CROSS)gcc
 OBJCOPY   := $(CROSS)objcopy
@@ -70,38 +70,27 @@ endif
 
 # --------------------------- 源文件 -----------------------------------------
 # 本工程自有源码（模组/接收器共用同一份；板级差异由 -Iapp/$(TARGET) 决定）
+# 角色入口：默认 app/main.c（main()）；芯片若由 ROM 约定其他入口
+# （如 fr2012a 的 user_main），由 port.mk 通过 CHIP_APP_MAIN 指定并从通配中排除。
+CHIP_PORT_SRC := $(filter-out $(CHIP_APP_MAIN),$(wildcard $(ROOT)/port/$(CHIP)/*.c))
 OUR_SRC := $(wildcard $(ROOT)/core/*.c) \
-           $(wildcard $(ROOT)/port/$(CHIP)/*.c) \
-           $(ROOT)/app/main.c
+           $(CHIP_PORT_SRC) \
+           $(if $(strip $(CHIP_APP_MAIN)),$(CHIP_APP_MAIN),$(ROOT)/app/main.c)
 
 ALL_SRC := $(OUR_SRC) $(CHIP_SDK_SRC) $(RF24_SRC)
 ALL_ASM := $(CHIP_SDK_ASM)
 
-# 链接脚本：模组 / 接收器均走同一套「常驻 BOOT」OTA 分区（App=APP_A @0x2000, 216K）。
-# 布局与升级流程见 port/ch58x/bridge_ota_layout.h。
-LDSCRIPT := $(ROOT)/app/$(TARGET)/Link_App216K.ld
+# 链接脚本：默认走「常驻 BOOT」OTA 分区（App=APP_A @0x2000, 216K），
+# 布局与升级流程见 port/ch58x/bridge_ota_layout.h；芯片可在 port.mk 覆盖。
+LDSCRIPT ?= $(ROOT)/app/$(TARGET)/Link_App216K.ld
 
 # --------------------------- 编译/链接参数 ----------------------------------
-ARCH    := -march=rv32imac -mabi=ilp32 -msmall-data-limit=8 -mno-save-restore
+ARCH    ?= -march=rv32imac -mabi=ilp32 -msmall-data-limit=8 -mno-save-restore
 OPT     ?= -Os
 
-# 不定义 CH58xBLE_ROM：那是「烧在 0x10000 的 ROM 库」变体（CH58xBLE_ROM.h）。
-# 本工程链接 EVT/EXAM/BLE/LIB/LIBCH58xBLE.a，须让 CONFIG.h 走 CH58xBLE_LIB.h。
-# 也不定义 DEBUG：SDK 的 PRINT/printf 会走 UART1，与桥数据面冲突（日志走 UART0，
-# 见 core/bridge_log.h）。
-CDEFS   :=
-# 低功耗：CH58X_LowPower() 仅在 HAL_SLEEP==TRUE 时真正进睡（HAL/SLEEP.c 编译期开关）。
-# SDK 的 HAL/include/config.h 用 #ifndef 提供默认值 FALSE，这里用命令行宏覆盖，
-# 避免修改 SDK submodule（固定 commit）。SLEEP=0 时不定义 → HAL_SLEEP 默认 FALSE → 不进睡。
-ifeq ($(SLEEP),0)
-else
-CDEFS   += -DHAL_SLEEP=TRUE
-endif
-# BLE 数据面缓冲长度：SDK HAL/MCU.c 用它填 cfg.BufMaxLen，而 ATT_MTU = BufMaxLen - 4。
-# SDK 默认 27 → ATT_MTU=23 → 单次 notify 上限 MTU-3=20B，无法承载 VIA Raw HID 的
-# RID0 32B 报表（HidDev_sendNoti→GATT_Notification 因超长失败）。128 → ATT_MTU=124，
-# 既满足 RID0 32B，也给 GATT 透传服务留足余量。用命令行宏覆盖，不动 SDK submodule。
-CDEFS   += -DBLE_BUFF_MAX_LEN=128
+# 芯片相关的编译宏（HAL_SLEEP / 缓冲长度 / Flash 容量等）由 port.mk 提供，
+# 本文件只保留与芯片无关的部分。
+CDEFS   := $(CHIP_CDEFS)
 ifeq ($(LOG),0)
 CDEFS   += -DBRIDGE_BOARD_LOG_ENABLE=0
 endif
@@ -114,7 +103,8 @@ ifneq ($(strip $(EXTRA_CDEFS)),)
 CDEFS   += $(EXTRA_CDEFS)
 endif
 
-INC     := -I$(ROOT)/core -I$(ROOT)/hal -I$(ROOT)/port/$(CHIP) -I$(ROOT)/app/$(TARGET) \
+INC     := -I$(ROOT)/core -I$(ROOT)/hal -I$(ROOT)/port/$(CHIP) $(CHIP_INCS) \
+           -I$(ROOT)/app/$(TARGET) \
            $(addprefix -I,$(CHIP_SDK_INCS)) $(addprefix -I,$(RF24_INCS))
 
 WARN    ?= -Wall -Wno-unused-parameter
@@ -126,12 +116,14 @@ ASFLAGS := $(ARCH) -x assembler-with-cpp -g3 $(INC)
 SYS_LIBS ?= --specs=nano.specs --specs=nosys.specs
 
 # --------------------------- 输出 -------------------------------------------
+# 多芯片共用同一份 build/ 时会混入其他架构的 .o（例如 ARM 链接到 RISC-V 目标文件），
+# 故允许 port.mk 用 CHIP_OUT_SUFFIX 给输出目录加芯片后缀（ch58x 保持原路径不变）。
 ifeq ($(SLEEP),0)
-OUT     := $(ROOT)/build/$(TARGET)-nosleep
+OUT     := $(ROOT)/build/$(TARGET)$(CHIP_OUT_SUFFIX)-nosleep
 else ifeq ($(LOG),0)
-OUT     := $(ROOT)/build/$(TARGET)-release
+OUT     := $(ROOT)/build/$(TARGET)$(CHIP_OUT_SUFFIX)-release
 else
-OUT     := $(ROOT)/build/$(TARGET)
+OUT     := $(ROOT)/build/$(TARGET)$(CHIP_OUT_SUFFIX)
 endif
 BIN     := bridge_$(TARGET)
 ELF     := $(OUT)/$(BIN).elf
@@ -172,7 +164,7 @@ __build: $(ELF)
 	@echo ""
 
 $(ELF): $(OBJS) $(LDSCRIPT) $(CHIP_SDK_LIBS) | $(OUT)
-	$(CC) $(ARCH) -T$(LDSCRIPT) -nostartfiles -Wl,--gc-sections \
+	$(CC) $(ARCH) -T$(LDSCRIPT) $(CHIP_LDFLAGS) -nostartfiles -Wl,--gc-sections \
 	      -Wl,-Map=$(MAP) $(SYS_LIBS) \
 	      -o $@ $(OBJS) $(CHIP_SDK_LIBS)
 	$(OBJCOPY) -O ihex   $@ $(OUT)/$(BIN).hex
@@ -223,6 +215,16 @@ KEYBOARD_APP_HEX := $(ROOT)/build/keyboard$(APP_SFX)/bridge_keyboard.hex
 DONGLE_APP_HEX   := $(ROOT)/build/dongle$(APP_SFX)/bridge_dongle.hex
 
 .PHONY: images
+ifeq ($(strip $(CHIP_BOOT_LD)),)
+# 该芯片无常驻 BOOT（如 fr2012a v1）：只构建 App，不合并整机 hex
+images:
+	@echo ""
+	@echo "  chip=$(CHIP) 无常驻 BOOT 镜像：仅构建 App（不做 BOOT+APP 合并）"
+	@$(MAKE) --no-print-directory both CHIP=$(CHIP) LOG=$(LOG) SLEEP=$(SLEEP) \
+	        SDK_ROOT=$(SDK_ROOT) SDK_DIR=$(SDK_DIR) RF24_DIR=$(RF24_DIR) \
+	        LIB_FLASH_BASE_ADDRESSS=$(LIB_FLASH_BASE_ADDRESSS)
+	@echo ""
+else
 images: $(BOOT_ELF_KBD) $(BOOT_ELF_DGL)
 	@echo ""
 	@$(MAKE) --no-print-directory both CHIP=$(CHIP) LOG=$(LOG) SLEEP=$(SLEEP) \
@@ -256,6 +258,7 @@ images: $(BOOT_ELF_KBD) $(BOOT_ELF_DGL)
 	@echo "      模组  : $(BOOT_DIR)/bridge_keyboard_full.hex"
 	@echo "      接收器: $(BOOT_DIR)/bridge_dongle_full.hex"
 	@echo ""
+endif
 
 $(BOOT_ELF_KBD): $(CHIP_BOOT_KBD_SRC) $(CHIP_BOOT_ASM) $(CHIP_BOOT_LD) | $(BOOT_DIR)
 	$(CC) $(CFLAGS) -T$(CHIP_BOOT_LD) -nostartfiles -Wl,--gc-sections \
@@ -278,5 +281,5 @@ clean:
 	rm -rf $(ROOT)/build
 
 help:
-	@echo "make keyboard|dongle|both [CHIP=ch58x] [LOG=0|1] [SDK_ROOT=<openwch/ch583 仓库根>] [SDK_DIR=<例程目录>] [RF24_DIR=...] [LIB_FLASH_BASE_ADDRESSS=...]"
+	@echo "make keyboard|dongle|both [CHIP=ch58x|fr2012a] [LOG=0|1] [SDK_ROOT=<openwch/ch583 仓库根>] [SDK_DIR=<例程目录>] [RF24_DIR=...] [LIB_FLASH_BASE_ADDRESSS=...]"
 	@echo "make images        # BOOT@0x0(模组/接收器) + APP_A@0x2000 + 合并整机 hex（工厂只烧一条）"

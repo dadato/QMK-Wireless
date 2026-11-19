@@ -4,7 +4,7 @@
  *   1. 全工程**只有 bridge_ch58x_sdk.c 一个文件** #include WCH SDK 头；
  *      bridge_port_ch58x.c / bridge_radio_ch58x.c 只依赖本头文件，
  *      因此可在 PC 上用 test_host/sdk_stub.c 顶替后真编译真运行，
- *      使 port 层逻辑（波特率、TX 背压、NV 布局、ADC 换算、射频状态翻译）
+ *      使 port 层逻辑（波特率、TX 背压、NV 布局、GPIO 模式、射频状态翻译）
  *      获得与 core 同等强度的主机验证。
  *   2. 本头文件里的函数全部是 SDK 调用的**机械映射**，不含业务逻辑。
  *
@@ -58,21 +58,15 @@ void     sdk_uart1_rx_wake_enable(bool en);
  * 「接收活动保持清醒」窗口（见 BRIDGE_RX_HOLD_AWAKE_MS）。 */
 bool     sdk_uart1_rx_woke(void);
 
-/* ---------------- UART0：printf 日志（PB4=RXD0 / PB7=TXD0） ---------------- */
+/* ---------------- UART0：printf 日志（仅 PB7=TXD0，无 RX） ---------------- */
 void     sdk_uart0_init(uint32_t baud);
 void     sdk_uart0_write(const uint8_t *d, uint16_t len);
 
-/* ---------------- GPIO（port 用 ASCII 'A'/'B'） ---------------- */
+/* ---------------- GPIO ---------------- */
 void     sdk_gpio_out_init(uint8_t port, uint8_t pin, bool high);
 void     sdk_gpio_in_pullup(uint8_t port, uint8_t pin);
-void     sdk_gpio_in_pulldown(uint8_t port, uint8_t pin);
-void     sdk_gpio_adc_in(uint8_t port, uint8_t pin);
 void     sdk_gpio_write(uint8_t port, uint8_t pin, bool high);
 bool     sdk_gpio_read(uint8_t port, uint8_t pin);
-
-/* ---------------- ADC ---------------- */
-/* 单次转换并换算为引脚上的毫伏值（参考电压/校准由 SDK 层负责） */
-uint16_t sdk_adc_read_mv(uint8_t ch);
 
 /* ---------------- Flash / DataFlash ---------------- */
 /* CH58x 地址空间：CodeFlash 0x00000-0x6FFFF，DataFlash 0x70000-0x77FFF，

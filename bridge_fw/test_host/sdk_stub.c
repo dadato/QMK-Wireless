@@ -307,20 +307,6 @@ void sdk_gpio_in_pullup(uint8_t port, uint8_t pin)
     }
 }
 
-void sdk_gpio_in_pulldown(uint8_t port, uint8_t pin)
-{
-    if (pin < 32u) {
-        s_gpio_mode[pidx(port)][pin] = STUB_GPIO_IN_PD;
-    }
-}
-
-void sdk_gpio_adc_in(uint8_t port, uint8_t pin)
-{
-    if (pin < 32u) {
-        s_gpio_mode[pidx(port)][pin] = STUB_GPIO_IN_FLOAT;
-    }
-}
-
 void sdk_gpio_write(uint8_t port, uint8_t pin, bool high)
 {
     if (pin < 32u) {
@@ -336,26 +322,6 @@ bool sdk_gpio_read(uint8_t port, uint8_t pin)
     uint8_t p = pidx(port);
     return (s_gpio_mode[p][pin] == STUB_GPIO_OUT) ? s_gpio_out[p][pin]
                                                  : s_gpio_in[p][pin];
-}
-
-/* ============================ ADC ============================ */
-
-static uint16_t s_adc_mv[16];
-static uint32_t s_adc_reads;
-
-void stub_adc_set_mv(uint8_t ch, uint16_t mv)
-{
-    if (ch < 16u) {
-        s_adc_mv[ch] = mv;
-    }
-}
-
-uint32_t stub_adc_reads(void) { return s_adc_reads; }
-
-uint16_t sdk_adc_read_mv(uint8_t ch)
-{
-    s_adc_reads++;
-    return (ch < 16u) ? s_adc_mv[ch] : 0u;
 }
 
 /* ============================ 射频 ============================ */
@@ -1000,9 +966,6 @@ void stub_reset(void)
             s_gpio_out[p][i]  = false;
         }
     }
-
-    memset(s_adc_mv, 0, sizeof(s_adc_mv));
-    s_adc_reads = 0u;
 
     stub_radio_obs_reset();
     stub_radio_clear_links();

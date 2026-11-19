@@ -123,20 +123,18 @@ CH582M 在本方案中作为**无线协处理器（Wireless Co-Processor）**，
 
 | 信号 | 桥侧引脚（QFN28） | 方向 | 电平语义 | 用途 |
 |---|---|---|---|---|
-| `MODE_SEL[1:0]` | PB12（pin 11）/ PB13（pin 10） | SK32 → CH582 | 00=USB, 01=BLE, 10=2.4G, 11=保留 | 快速模式指示（上电采样 + 运行期变化触发中断） |
 | `WAKE` | PA5（pin 24） | CH582 → SK32 | 高有效（可配） | 请求 SK32 从 STOP 模式唤醒 |
 | `nRESET` | PB23（pin 16，`RST#`） | SK32 → CH582 | 低有效 | 硬复位桥（内置上拉） |
-| `LINK` | PA13（pin 27） | CH582 → SK32 | 高=已连接 | 连接状态硬件指示（可选，亦可纯软件上报） |
 
-> 模式同时支持 **GPIO 硬线**与 **UART 命令**两种设定方式；UART 命令为准，GPIO 用于上电初值与异常恢复场景。
+> 工作模式**只由 UART 命令**设定：键盘侧上电缺省 `MODE_USB`（射频关闭），由 SK32 下发 `SET_MODE`；
+> 板级已取消 `MODE_SEL[1:0]` 与 `LINK` 硬线。
 
 ### 4.3 电源与检测
 
 | 项 | 规格 |
 |---|---|
 | 供电 | 3.3V（由板级 DC-DC 提供） |
-| 电池采集 | **PA14（pin 26，AIN4 / ADC ch4）**，分压采电池电压 |
-| 充电状态 | **PA15（pin 25）** GPIO 输入，读取充电 IC 的 `CHRG` / `STDBY` |
+| 电池 / 充电 | **不做本地采样**：无 BAT_ADC、无 CHRG_STAT 引脚；电量与充电状态一律由 `SET_BATTERY(0x1C)` 命令输入 |
 | VBUS 检测 | 由 SK32 侧完成，经 UART 命令同步给桥 |
 | 休眠控制 | 桥自行进入 Halt / Sleep，唤醒源见 9.3 |
 | DC-DC 外围 | VDCID/VSW 需 2.2µF + 10µH 电感，VINTA 1µF；缺任一个可能导致蓝牙频繁掉线（见 pinmap 3.3） |
@@ -146,7 +144,7 @@ CH582M 在本方案中作为**无线协处理器（Wireless Co-Processor）**，
 - **ISP 下载配置引脚 = PB22（pin 17）**，必须 **10k 上拉**，上电不得被拉低；**不得**用该脚承载 UART 或任何上电可能为低的信号。
 - **USB 引脚**：PB10（pin 13，UD-）/ PB11（pin 12，UD+）。键盘侧桥不做 USB，留作备用；**Dongle 侧必须使用**（D7）。
 - **PA10/PA11** 为 32.768kHz 低速晶振脚（X32KI/X32KO，LSE，**已实装**）：固件以 `CLK_OSC32K=0` 选外部 LSE（D15），作为 RTC / TMOS 时基（同步跳频若将来实现，可再以其为基准；当前跳频未启用，见 §8.3）；**严禁**再配置为 GPIO。
-- QFN28（CH582F）可用 20 个 GPIO，本方案已占用 12 个，余 3~5 个备用（见 pinmap 第 3.4 节）。`LINK` 可软件化、`MODE_SEL` 可降到 1 根以进一步释放。
+- QFN28（CH582F）可用 20 个 GPIO；键盘侧已分配 7 个（UART 2 + WAKE + RST# + SDI 2 + DBG_TX），其余统一推挽输出低（见 pinmap 第 3.4 节）。
 - 完整管脚表见 [pinmap_ch58x.md](./pinmap_ch58x.md) 第 3 章（键盘侧）与第 4 章（Dongle 侧）。
 
 ---
@@ -181,7 +179,7 @@ VBUS 插入  >  SK32 显式 SET_MODE  >  上次记忆模式
 
 | 当前 | 事件 | 目标 | 动作 |
 |---|---|---|---|
-| 任意 | 上电 / 复位 | 按 `MODE_SEL` 初值 | 读配置、初始化射频 |
+| 任意 | 上电 / 复位 | 键盘=`MODE_USB`（射频关闭，等命令）/ Dongle=`MODE_2G4` | 读配置、按缺省模式初始化 |
 | `MODE_USB` | VBUS 移除 | 记忆模式 | 初始化对应射频栈 |
 | `MODE_BLE` | `SET_MODE(2.4G)` | `MODE_2G4` | 断开 BLE、启动 2.4G |
 | `MODE_BLE` | `PAIR_START` | `MODE_BLE_PAIR` | 进入可发现广播 |
@@ -246,18 +244,16 @@ VBUS 插入  >  SK32 显式 SET_MODE  >  上次记忆模式
 | `0x19` | `TUNNEL_BLE` | ≤32B | 透传到 BLE（手机 APP 通道），无 ACK |
 | `0x1A` | `NV_WRITE` | addr(1B), data(32B) | 写用户 NV 单元（每单元 32B，`addr` 越界回 `PARAM`） |
 | `0x1B` | `NV_READ` | addr(1B) | 读用户 NV 单元，应答 addr(1B)+data(32B) |
-| `0x1C` | `SET_BATTERY` | percent(1B, 0~100), flags(1B, 可选) | SK32 上报电量与充电状态，优先于本地 ADC；`flags` bit0=充电中（1=充电/0=未充电），省略时按未充电；随后回 `EVT_STATE` |
+| `0x1C` | `SET_BATTERY` | percent(1B, 0~100), flags(1B, 可选) | **唯一电量来源**：SK32 下发电量与充电状态（模组无本地采样）；`flags` bit0=充电中（1=充电/0=未充电），省略时按未充电；随后回 `EVT_STATE` |
 | `0x1D` | `SLEEP` | level(1B) | 睡眠分级：0=唤醒 / 1=浅睡 / 2=深睡（配 `SET_CONFIG` key `SLEEP_POLICY`） |
 | `0x25` | `SLEEP_CFG` | idle_s(2B LE), deep_s(2B LE) | 配置 AUTO 策略自动休眠时间门限（单位 s，落盘）：idle_s=距最近串口接收活动达该秒数后允许浅睡（0=禁用自动浅睡）/ deep_s=未连接且空闲达该秒数后进深睡（0=禁用自动深睡）；仅 `SLEEP_POLICY=AUTO` 生效；payload 长度非 4 → `PARAM` |
-| `0x26` | `BATTERY_CFG` | enable(1B), on_change(1B), period_s(1B) | 配置 `EVT_BATTERY` 的开关与发送机制（落盘）：enable=总开关(0=关/1=开)；on_change=电量变化时立即上报(0=关/1=开)；period_s=定时上报周期(单位 S，0=关闭定时)；payload 长度非 3 → `PARAM`；**`EVT_BATTERY` 仅 `BATTERY_SRC=LOCAL`（本地 ADC）时才会上报** |
-| `0x1E` | `GET_ADC` | — | 读本地 ADC 电压，应答 mv(2B 小端) |
 | `0x1F` | `SET_NAME` | target(1B), name... | 运行时改标识：target 0=BLE 广播名 / 1=USB(Dongle) 名（另一侧经 2.4G 中继） |
 | `0x20` | `SET_USB_ID` | vid(2B LE), pid(2B LE) | 运行时改 USB VID/PID（Dongle 侧重枚举） |
 | `0x21`~`0x24` | `FW_BEGIN` / `FW_DATA` / `FW_END` / `FW_ABORT` | 见 §10 | 键盘侧 UART OTA 帧；升级流程由 `web/ota` 承担 |
 | `0x7F` | `PING` | — | 心跳 |
 
-> `0x18`~`0x26` 为借鉴市售模组指令集新增的扩展命令，完整 payload 与应答格式见
-> [debug_web/SPEC.md](../web/debug/SPEC.md) §4.6 / §4.7；`0x0F`、`0x16`、`0x17` 保留未用。
+> `0x18`~`0x25` 为借鉴市售模组指令集新增的扩展命令，完整 payload 与应答格式见
+> [debug_web/SPEC.md](../web/debug/SPEC.md) §4.6 / §4.7；`0x0F`、`0x16`、`0x17`、`0x1E`、`0x26` 保留未用。
 
 **下行（桥 → SK32）**
 
@@ -265,7 +261,6 @@ VBUS 插入  >  SK32 显式 SET_MODE  >  上次记忆模式
 |---|---|---|---|
 | `0x80` | `EVT_STATE` | mode, link, profile, battery | 状态变化主动上报 |
 | `0x81` | `EVT_LEDS` | led_state(1B) | Caps/Num/Scroll，映射 `keyboard_leds()` |
-| `0x82` | `EVT_BATTERY` | mv(2B), percent(1B), flags(1B) | 电量上报；**仅 `BATTERY_SRC=LOCAL`（本地 ADC）时才有**，按 `BATTERY_CFG(0x26)` 的开关/变化/定时机制下发；`flags` bit0=充电中（1=充电/0=未充电），其余位保留 |
 | `0x83` | `EVT_PAIR_RESULT` | result(1B), profile(1B) | 配对结果；`result=0` 成功、`=1` 失败/超时（配对窗口超过 `duration_s`（`PAIR_START` 设置，缺省 `BRIDGE_PAIR_TIMEOUT_S`=60s）未成功时发一次瞬时事件；`duration_s=0` 不超时） |
 | `0x84` | `EVT_ERROR` | code(1B) | 错误码 |
 | `0x85` | `EVT_TUNNEL_USB` | ≤64B | USB/Dongle 透传上报（VIA Raw HID 通道），无应答 |
@@ -478,22 +473,21 @@ Dongle 以**复合设备**枚举（3 接口 / EP1~EP3），使主机侧无需驱
 | 源 | 说明 |
 |---|---|
 | UART RX | SK32 有报文 |
-| `MODE_SEL` 变化 | 用户切换模式 |
 | 射频事件 | 连接请求 / 主机下行数据 |
-| RTC | 周期唤醒（心跳、电量采样） |
+| RTC | 周期唤醒（心跳） |
 
 > 桥被唤醒后需拉 `WAKE` 通知 SK32（若 SK32 处于 STOP）。
 
-### 9.4 电量采集与告警
+### 9.4 电量与充电状态（仅命令输入）
 
-- ADC 周期采样电池电压（默认 10s 一次，`MODE_SLEEP` 时降频）
-- 分压系数与电池曲线在 `InfoFlash`/配置区标定
-- 阈值：低于 **20%** 首次告警一次，低于 **5%** 重复告警
-- `EVT_BATTERY` 上报门控（`BATTERY_CFG(0x26)`，落盘）：**仅 `BATTERY_SRC=LOCAL`** 时才发；`enable`=总开关，`on_change`=电量百分比或充电状态变化即报（优先并刷新定时基准），`period_s`=定时上报周期（单位 s，0=关闭定时）；默认 1 / 1 / 10s
+- 模组**不接电池 ADC、不接充电检测线**，不做任何本地采样。
+- 电量百分比与充电状态由 SK32 经 `SET_BATTERY (0x1C)` 下发（建议 1s 一次）：
+  模组仅缓存该值，用于 `EVT_STATE` 的 `battery%` 字段与 BLE 电池服务（BAS）。
+- 低电阈值与关机保护由 SK32 侧决策；模组不再上报 `EVT_BATTERY`、也不提供 `GET_ADC`。
 
 ### 9.5 充电时行为
 
-- 检测到充电（`CHRG` 有效）→ 建议切 `MODE_USB`（由 SK32 决策）
+- 充电状态随 `SET_BATTERY` 的 `flags` bit0 输入；是否切 `MODE_USB` 由 SK32 决策。
 - 充电中不禁止无线，但需在异常排查时提供"充电强制有线"开关
 
 ---
@@ -623,7 +617,7 @@ Dongle 以**复合设备**枚举（3 接口 / EP1~EP3），使主机侧无需驱
 | CodeFlash | 448 KB | BOOT 8K + APP_A 216K + Stage 216K + 顶部余 8K（**常驻 BOOT，应用可用 216K**） | 应用 ≤ 216 KB，需实测 |
 | DataFlash | 32 KB | 4 组绑定 + 配置 + 日志等级 | 充裕 |
 | SRAM | 30 KB + 2 KB | 射频栈 + 协议缓冲 + 日志缓冲（约 256~512 B） | 需实测 |
-| GPIO | **20（QFN28）** | UART 2 + 控制 5 + ADC 1 + 充电 1 + ISP 1 + 调试 2 = 12 | 余 3~5，见 pinmap 3.4 |
+| GPIO | **20（QFN28）** | UART 2 + 控制 2（WAKE/nRESET）+ ISP 1 + SDI 2 + DBG_TX 1 = 8 | 其余统一推挽输出低，见 pinmap 3.4 |
 
 > 日志关闭时（`BRIDGE_LOG_ENABLE=0`）不占用 SRAM 与 CodeFlash；调试构建约增加 4~8 KB CodeFlash 与 0.5 KB SRAM。
 
@@ -699,7 +693,7 @@ CH582M 侧需 SK32 侧配合完成以下改动（**不在本文件实现范围**
 
 ### 15.2 遗留待确认
 
-1. **SK32 侧 GPIO 可用性**：已核实串口走 USART1（PA9/PA10）；MODE_SEL0/1、WAKE、LINK、nRESET 的 SK32 侧引脚为 PB3/PB4/PB6~PB8 建议值，须按最终矩阵/扩展器件复核（见 pinmap 第 7 章）
+1. **SK32 侧 GPIO 可用性**：已核实串口走 USART1（PA9/PA10）；WAKE、nRESET 的 SK32 侧引脚为 PB6/PB8 建议值，须按最终矩阵/扩展器件复核（见 pinmap 第 7 章）；模式与电量均改为纯命令交互
 2. **ISP 下载配置引脚**：已定 PB22（pin 17，10k 上拉），但 WCHISPTool 实际可选项有限，投板前需在工具中确认 PB22 可选；若不可选须整体改板
 3. **应用空间实测**：需实测应用占用（≤ 216KB，见 10.4），确认 ≥15% 余量；Stage 区随 APP_A 固定 216KB（不占应用可见空间）
 4. 认证范围：SRRC 之外是否还需 CE / FCC

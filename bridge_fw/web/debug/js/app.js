@@ -175,7 +175,7 @@
     setVal('cPong', s ? s.pongRx : 0);
   }
 
-  /** 刷新状态快照（版本/状态/MAC/ADC/BLE 槽绑定） */
+  /** 刷新状态快照（版本/状态/MAC/BLE 槽绑定） */
   async function refreshDashboard(full) {
     if (!commands) { return; }
     try {
@@ -185,11 +185,9 @@
       var mac = await commands.getMac();
       setVal('stMac', mac.mac);
       setStat('statMac', mac.mac === '00:00:00:00:00:00' ? 'warn' : 'good');
-      var adc = await commands.getAdcMv();
-      setVal('stAdc', adc.mv + ' mV');
       await refreshBleSlots();
       log('OK', '状态快照：mode=' + st.modeName + ' connected=' + st.connected +
-        ' profile=' + st.profile + ' battery=' + st.battery + '% MAC=' + mac.mac + ' ADC=' + adc.mv + 'mV');
+        ' profile=' + st.profile + ' battery=' + st.battery + '% MAC=' + mac.mac);
     } catch (e) {
       log('WARN', '状态刷新失败：' + e.message);
     }
@@ -305,12 +303,6 @@
         refreshBleSlots();
         log('INFO', 'EVT_STATE mode=' + s.modeName + ' connected=' + s.connected +
           ' profile=' + s.profile + ' battery=' + s.battery + '%', '←');
-      } else if (fr.cmd === F.EVT.BATTERY) {
-        var b = D.decodeBattery(fr.payload);
-        setVal('stBattery', b.percent + '%');
-        setVal('stAdc', b.mv + ' mV');
-        log('INFO', 'EVT_BATTERY ' + b.mv + 'mV / ' + b.percent + '%' +
-          (b.charging ? ' / 充电中' : ''), '←');
       } else if (fr.cmd === F.EVT.LEDS) {
         setLeds(D.decodeLeds(fr.payload));
         log('INFO', 'EVT_LEDS ' + F.bytesToHex(fr.payload), '←');

@@ -1,7 +1,7 @@
 /* 全命令表 → JS 方法（镜像 tools/sk32sim/client.py）
  *
  * 语义：
- *   - 控制路径（GET_、SET_、PAIR、UNPAIR、NV、BATTERY、SLEEP、ADC、NAME、USB_ID、PING、
+ *   - 控制路径（GET_、SET_、PAIR、UNPAIR、NV、BATTERY、SLEEP、NAME、USB_ID、PING、
  *     ENTER_BOOT 等）：发帧后等待固件 ACK/ERR；失败抛 BridgeError/BridgeTimeout。
  *   - 无应答路径（HID 0x10~0x15 / TUNNEL 0x18/0x19 / RESET）：直接发送不等应答。
  *     注意 ENTER_BOOT(0x08) 属控制路径——先回 ACK，约 60ms 后跳 bootloader（协议 §9.8）。
@@ -51,12 +51,6 @@
     var m = D.decodeMac(fr.payload);
     m.frame = fr;
     return m;
-  };
-  Commands.prototype.getAdcMv = async function () {
-    var fr = await this.link.request(F.CMD.GET_ADC);
-    var a = D.decodeAdc(fr.payload);
-    a.frame = fr;
-    return a;
   };
   Commands.prototype.ping = function (timeoutMs) {
     return this.link.request(F.CMD.PING, null, timeoutMs || 500, 0);
@@ -125,9 +119,6 @@
   Commands.prototype.setConnInterval = function (units) {
     return this.setConfig(F.CFG_KEY.CONN_INTERVAL, Uint8Array.of(units & 0xFF));
   };
-  Commands.prototype.setBatterySrc = function (src) {
-    return this.setConfig(F.CFG_KEY.BATTERY_SRC, Uint8Array.of(src & 0xFF));
-  };
   Commands.prototype.setSleepPolicy = function (policy) {
     return this.setConfig(F.CFG_KEY.SLEEP_POLICY, Uint8Array.of(policy & 0xFF));
   };
@@ -152,13 +143,6 @@
     var fr = await this.link.request(F.CMD.SLEEP_CFG,
       Uint8Array.of(i & 0xFF, (i >> 8) & 0xFF, d & 0xFF, (d >> 8) & 0xFF));
     return { frame: fr, text: '睡眠时间已配置 IDLE=' + i + 's / DEEP=' + d + 's（0=禁用该项自动休眠，仅 AUTO 策略生效）' };
-  };
-  Commands.prototype.batteryCfg = async function (enable, onChange, periodS) {
-    var en = enable ? 1 : 0, oc = onChange ? 1 : 0, ps = periodS & 0xFF;
-    var fr = await this.link.request(F.CMD.BATTERY_CFG, Uint8Array.of(en, oc, ps));
-    return { frame: fr, text: '电量上报已配置：总开关=' + (en ? '开' : '关') +
-      ' / 变化即报=' + (oc ? '开' : '关') + ' / 定时=' + (ps === 0 ? '关' : ps + 's') +
-      '（EVT_BATTERY 仅在 battery_src=LOCAL 时上报）' };
   };
   Commands.prototype.nvWrite = async function (addr, data) {
     if (data.length !== F.NV_UNIT) {
@@ -313,10 +297,6 @@
           desc: '读取本机 6 字节蓝牙 MAC。\n请求：无 payload。\n应答：ACK + 6B [b0..b5]（LE 排列）。\n错误码：底层读取失败 → STATE。',
           fields: [],
           run: async function (c) { var m = await c.getMac(); return { text: 'MAC ' + m.mac, frame: m.frame }; } },
-        { id: 'get_adc', label: 'GET_ADC', cmd: F.CMD.GET_ADC,
-          desc: '读取电池 ADC 电压。\n请求：无 payload。\n应答：ACK + 2B [mv_lo][mv_hi]（LE，单位 mV）。\n错误码：无。',
-          fields: [],
-          run: async function (c) { var a = await c.getAdcMv(); return { text: 'ADC ' + a.mv + ' mV', frame: a.frame }; } },
         { id: 'get_diag', label: 'GET_DIAG', cmd: F.CMD.GET_DIAG,
           desc: '读取 2.4G 射频诊断计数（24B，排障用）。\n请求：无 payload。\n应答：ACK + 24B：[0]up [1]conn [2]bound [3]tx_busy [4]tx_q_cnt [5]hb_miss [6..7]report_period，[8..23] 依次为 tx_submit_ok/fail、tx_done_ok/fail、tx_timeout、rx_any、hop_shut、rx_data_bad（[6..23] 均 LE16）。\n错误码：无。',
           fields: [],
@@ -380,11 +360,6 @@
           fields: [
           { key: 'units', label: '单位', type: 'number', def: '6', min: 0, max: 255 }
         ], run: function (c, v) { return c.setConnInterval(parseInt(v.units, 10)); } },
-        { id: 'battery_src', label: 'SET_CONFIG · BATTERY_SRC', cmd: F.CMD.SET_CONFIG,
-          desc: '写配置 key=0x05：电量来源。\n请求：value=1B。\n取值：0=AUTO（自动）/ 1=LOCAL（本地 ADC）/ 2=EXTERNAL（外部上报）；缺省 0。\n错误码：PARAM。',
-          fields: [
-          { key: 'src', label: '来源', type: 'select', def: '0', options: [['0', '0 = AUTO'], ['1', '1 = LOCAL'], ['2', '2 = EXTERNAL']] }
-        ], run: function (c, v) { return c.setBatterySrc(parseInt(v.src, 10)); } },
         { id: 'sleep_policy', label: 'SET_CONFIG · SLEEP_POLICY', cmd: F.CMD.SET_CONFIG,
           desc: '写配置 key=0x06：休眠策略。\n请求：value=1B。\n取值：0=AUTO（自动判闲休眠）/ 1=MANUAL（仅 SLEEP 指令）；缺省 0。\n错误码：PARAM。',
           fields: [
@@ -396,7 +371,7 @@
           { key: 'enable', label: '状态', type: 'select', def: '1', options: [['1', '1 = 开启'], ['0', '0 = 关闭']] }
         ], run: function (c, v) { return c.setHeartbeat(parseInt(v.enable, 10) !== 0); } },
         { id: 'config_raw', label: 'SET_CONFIG · 原始键', cmd: F.CMD.SET_CONFIG,
-          desc: '写任意配置键（调试用）。\n请求：[key][value...]，长度须与 key 匹配。\n键表：0x01=REPORT_PERIOD(2B) / 0x02=LOG_LEVEL(1B) / 0x03=ADV_NAME_MAC(1B) / 0x04=CONN_INTERVAL(1B) / 0x05=BATTERY_SRC(1B) / 0x06=SLEEP_POLICY(1B)；其他 → UNSUPPORTED（对外报 PARAM）。\n边界：key 不识别 / 长度不匹配 / 值非法 → PARAM。',
+          desc: '写任意配置键（调试用）。\n请求：[key][value...]，长度须与 key 匹配。\n键表：0x01=REPORT_PERIOD(2B) / 0x02=LOG_LEVEL(1B) / 0x03=ADV_NAME_MAC(1B) / 0x04=CONN_INTERVAL(1B) / 0x06=SLEEP_POLICY(1B)；其他 → UNSUPPORTED（对外报 PARAM）。\n边界：key 不识别 / 长度不匹配 / 值非法 → PARAM。',
           fields: [
           { key: 'key', label: 'key(hex)', type: 'hex', def: '7F', maxBytes: 1 },
           { key: 'value', label: 'value(hex)', type: 'hex', def: '' }
@@ -409,7 +384,7 @@
     {
       name: '电源与其他', items: [
         { id: 'set_battery', label: 'SET_BATTERY', cmd: F.CMD.SET_BATTERY,
-          desc: '外部上报电量百分比与充电状态（先回 ACK，再下发 EVT_STATE）。\n请求：[percent u8][flags u8]（flags 可选，旧版单字节仍接受）。\npercent 取值：0x00..0x64 = 0..100%；>0x64 截断为 100%。\nflags 取值：bit0 = 充电中（1=充电，0=未充电），其余位保留 0。\n现象：仅 battery_src=EXTERNAL/AUTO 时优先于本地 ADC；低电告警 LOW ≤20% / CRIT ≤5%。\n边界：len<1 → PARAM。',
+          desc: '下发模组电量百分比与充电状态（唯一电量来源；先回 ACK，再下发 EVT_STATE）。\n请求：[percent u8][flags u8]（flags 可选，旧版单字节仍接受）。\npercent 取值：0x00..0x64 = 0..100%；>0x64 截断为 100%。\nflags 取值：bit0 = 充电中（1=充电，0=未充电），其余位保留 0。\n说明：模组无本地 ADC，不再上报 EVT_BATTERY。\n边界：len<1 → PARAM。',
           fields: [
           { key: 'percent', label: '电量% (0..100)', type: 'number', def: '66', min: 0, max: 100 },
           { key: 'charging', label: '充电中', type: 'select', def: '0', options: [['0', '0 = 未充电'], ['1', '1 = 充电中']] }
@@ -425,13 +400,6 @@
           { key: 'idle_s', label: 'IDLE 门限s (0=禁用)', type: 'number', def: '1', min: 0, max: 65535 },
           { key: 'deep_s', label: 'DEEP 门限s (0=禁用)', type: 'number', def: '30', min: 0, max: 65535 }
         ], run: function (c, v) { return c.sleepCfg(parseInt(v.idle_s, 10), parseInt(v.deep_s, 10)); } },
-        { id: 'battery_cfg', label: 'BATTERY_CFG', cmd: F.CMD.BATTERY_CFG,
-          desc: '配置 EVT_BATTERY 的开关与发送机制，落盘保存。\n请求：[enable][on_change][period_s]（各 1B）。\n  enable：总开关，0=关 / 1=开；\n  on_change：电量变化时立即上报，0=关 / 1=开；\n  period_s：定时上报周期，单位 S，0=关闭定时上报。\n边界：len≠3 → PARAM。\n现象：EVT_BATTERY 仅在 battery_src=LOCAL（本地 ADC）时才会上报；变化即报优先于定时并刷新定时基准。\n默认：enable=1 / on_change=1 / period_s=10。',
-          fields: [
-          { key: 'enable', label: '总开关', type: 'select', def: '1', options: [['1', '1 = 开'], ['0', '0 = 关']] },
-          { key: 'on_change', label: '变化即报', type: 'select', def: '1', options: [['1', '1 = 开'], ['0', '0 = 关']] },
-          { key: 'period_s', label: '定时上报s (0=关)', type: 'number', def: '10', min: 0, max: 255 }
-        ], run: function (c, v) { return c.batteryCfg(parseInt(v.enable, 10) !== 0, parseInt(v.on_change, 10) !== 0, parseInt(v.period_s, 10)); } },
         { id: 'nv_read', label: 'NV_READ', cmd: F.CMD.NV_READ,
           desc: '读用户 NV 单元。\n请求：[addr]（1B）。\naddr 取值：0..45（0x00..0x2D），共 46 个单元 × 32B。\n应答：ACK + 33B [addr][data0..31]。\n边界：len<1 或 addr≥46 → PARAM；底层读失败 → STATE。',
           fields: [

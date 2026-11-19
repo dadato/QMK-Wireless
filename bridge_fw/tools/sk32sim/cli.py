@@ -78,8 +78,6 @@ def do_cmd(client: BridgeClient, name: str, a) -> None:
         print(f"wireless_state = {w['name']}（{w['state']}）")
     elif name == "get_mac":
         print("mac =", client.get_mac().hex(":"))
-    elif name == "get_adc":
-        print(f"adc = {client.get_adc_mv()} mV")
     elif name == "ping":
         client.ping()
         print("PONG")
@@ -108,8 +106,6 @@ def do_cmd(client: BridgeClient, name: str, a) -> None:
         client.set_adv_name_mac(f(a[0]) != 0); print("ACK")
     elif name == "conn_interval":
         client.set_conn_interval(f(a[0])); print("ACK")
-    elif name == "battery_src":
-        client.set_battery_src(f(a[0])); print("ACK")
     elif name == "sleep_policy":
         client.set_sleep_policy(f(a[0])); print("ACK")
     elif name == "set_heartbeat":
@@ -151,9 +147,9 @@ def do_cmd(client: BridgeClient, name: str, a) -> None:
         client.tunnel_ble(bytes.fromhex(a[0])); print("已发送 TUNNEL_BLE")
     else:
         print("未知命令。可用："
-              "get_version/get_status/get_mode/get_wireless_state/get_mac/get_adc/ping/"
+              "get_version/get_status/get_mode/get_wireless_state/get_mac/ping/"
               "set_mode/set_profile/pair_start/unpair/test_mode/config/report_period/"
-              "log_level/adv_name_mac/conn_interval/battery_src/sleep_policy/set_heartbeat/"
+              "log_level/adv_name_mac/conn_interval/sleep_policy/set_heartbeat/"
               "battery/sleep/nv_read/nv_write/name/usb_id/"
               "reset/enter_boot/hid_kb/hid_nkro/hid_consumer/hid_mouse/hid_system/"
               "release/tunnel_usb/tunnel_ble")
@@ -230,7 +226,6 @@ def main(argv=None) -> int:
             print(f"version = {client.get_version()}")
             print(f"status  = {client.get_status()}")
             print(f"mac     = {client.get_mac().hex(':')}")
-            print(f"adc     = {client.get_adc_mv()} mV")
         elif args.action == "monitor":
             while True:
                 time.sleep(0.5)

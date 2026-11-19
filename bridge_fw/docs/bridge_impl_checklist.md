@@ -36,8 +36,8 @@
 | `APP/bridge_hid.c` / `.h` | HID 报文组装、NKRO→6KRO 降级、全键释放 | `bridge_ble` / `bridge_rf24` |
 | `APP/bridge_ble.c` / `.h` | BLE 封装：初始化、多主机、配对、连接回调 | Profil/ SDK BLE |
 | `APP/bridge_rf24.c` / `.h` | 2.4G 封装：**对厂商 2.4G 用例的薄封装**（init / send / 回调转事件），不自研协议（D11） | 厂商 2.4G 用例 |
-| `APP/bridge_power.c` / `.h` | 休眠策略、唤醒源、ADC 电量、充电检测 | SDK PWR/ADC |
-| `APP/bridge_gpio.c` / `.h` | `MODE_SEL` / `WAKE` / `LINK` 控制 | SDK GPIO |
+| `APP/bridge_power.c` / `.h` | 电量/充电状态缓存（**仅 `SET_BATTERY` 命令输入**，无本地采样） | 无（纯逻辑） |
+| `APP/bridge_gpio.c` / `.h` | `WAKE` 控制与未用引脚归位（`MODE_SEL`/`LINK` 已取消） | SDK GPIO |
 | `APP/bridge_cfg.c` / `.h` | 配置与配对元数据的 EEPROM 持久化（双备份+CRC） | SDK EEPROM |
 | `APP/bridge_log.c` / `.h` | **printf 日志（D13）**：编译期/运行期开关、分级、UART0 输出 | SDK UART0 |
 | `APP/bridge_test.c` / `.h` | **SRRC 认证**：读芯片唯一 MAC、定频连续发射测试模式 | SDK BLE / 2.4G |
@@ -58,6 +58,8 @@
 → `port/<chip>/`（芯片适配层，自带 `port.mk` 与厂商 SDK，对外仅暴露 `bridge_chip.h`）→
 `app/{main.c,keyboard,dongle}`（角色应用层）→ `boot/<chip>/`（常驻 BOOT 镜像）→ `web/`（通用测试 / OTA 页面，与芯片无关）。
 换芯片只需新增 `port/<newchip>/`，`core/` `hal/` `app/` `web/` 无需改动。
+已落地端口：`port/ch58x/`（CH582F/CH583）、`port/fr2012a/`（FreqChip FR800x，Cortex-M3，
+引脚与构建见 `docs/pinmap_fr2012a.md`；其入口为厂商 ROM 约定的 `user_main()`）。
 
 模块级调用关系（不变）：
 
@@ -120,7 +122,6 @@
 | `0x1B` | `NV_READ` | `static void handle_nv_read(const bridge_frame_t *f);` | 是 |
 | `0x1C` | `SET_BATTERY` | `static void handle_set_battery(const bridge_frame_t *f);` | 是 |
 | `0x1D` | `SLEEP` | `static void handle_sleep(const bridge_frame_t *f);` | 是 |
-| `0x1E` | `GET_ADC` | `static void handle_get_adc(const bridge_frame_t *f);` | 是 |
 | `0x1F` | `SET_NAME` | `static void handle_set_name(const bridge_frame_t *f);` | 是 |
 | `0x20` | `SET_USB_ID` | `static void handle_set_usb_id(const bridge_frame_t *f);` | 是 |
 | `0x21` | `FW_BEGIN` | `static void handle_fw_begin(const bridge_frame_t *f);` | 是 |
@@ -128,11 +129,10 @@
 | `0x23` | `FW_END` | `static void handle_fw_end(const bridge_frame_t *f);` | 是（应答并 flush 后进 IAP） |
 | `0x24` | `FW_ABORT` | `static void handle_fw_abort(const bridge_frame_t *f);` | 是 |
 | `0x25` | `SLEEP_CFG` | `static void handle_sleep_cfg(const bridge_frame_t *f);` | 是 |
-| `0x26` | `BATTERY_CFG` | `static void handle_battery_cfg(const bridge_frame_t *f);` | 是 |
 | `0x7F` | `PING` | 内联处理（心跳开时回 `bridge_evt_pong()`） | 是（回 `PONG`） |
 
 > 统一返回约定：处理函数为 `void`，成功/失败由函数内应答表达；`bridge_proto_dispatch()` 对未支持命令返回 `BRIDGE_ERR_UNSUPPORTED`。
-> 命令码枚举权威定义见 `core/bridge_types.h`；完整 payload / 应答格式见 [debug_web/SPEC.md](../web/debug/SPEC.md) §4.6 / §4.7。`0x0F`、`0x16`、`0x17` 保留未用。
+> 命令码枚举权威定义见 `core/bridge_types.h`；完整 payload / 应答格式见 [debug_web/SPEC.md](../web/debug/SPEC.md) §4.6 / §4.7。`0x0F`、`0x16`、`0x17`、`0x1E`、`0x26` 保留未用。
 
 ### 3.2 下行事件（桥 → SK32）构造函数在 `bridge_proto.c`
 
@@ -140,7 +140,6 @@
 |---|---|---|
 | `0x80` | `EVT_STATE` | `void bridge_evt_state(void);` |
 | `0x81` | `EVT_LEDS` | `void bridge_evt_leds(uint8_t led_state);` |
-| `0x82` | `EVT_BATTERY` | `void bridge_evt_battery(uint16_t mv, uint8_t percent, uint8_t flags);`（仅 `battery_src=LOCAL` 且 `BATTERY_CFG` 总开关开启时上报；`flags` bit0 = `BRIDGE_BATT_FLAG_CHARGING`） |
 | `0x83` | `EVT_PAIR_RESULT` | `void bridge_evt_pair_result(uint8_t result, uint8_t profile);` |
 | `0x84` | `EVT_ERROR` | `void bridge_evt_error(uint8_t code);` |
 | `0x85` | `EVT_TUNNEL_USB` | `void bridge_evt_tunnel(uint8_t kind, const uint8_t *payload, uint8_t len);`（`kind = BRIDGE_TUNNEL_USB`） |
@@ -223,7 +222,7 @@ typedef enum {
     BRIDGE_MODE_SLEEP,
 } bridge_mode_t;
 
-void          bridge_mode_init(void);                     /* 读 MODE_SEL + 记忆 */
+void          bridge_mode_init(void);                     /* 按板级缺省（键盘=USB / Dongle=2G4） */
 int           bridge_mode_set(bridge_mode_t m, bool persist);
 bridge_mode_t bridge_mode_get(void);
 void          bridge_mode_on_vbus(bool present);          /* 最高优先级 */
@@ -445,7 +444,7 @@ uint16_t Bridge_ProcessEvent(uint8_t task_id, uint16_t events)
 
 | 当前状态 | 事件 | 目标状态 | 实现函数 |
 |---|---|---|---|
-| 任意 | 上电/复位 | 按 `MODE_SEL` | `bridge_mode_init()` |
+| 任意 | 上电/复位 | 键盘=`MODE_USB`（射频关闭）/ Dongle=`MODE_2G4` | `bridge_mode_init()` |
 | 任意 | VBUS 插入 | `MODE_USB` | `bridge_mode_on_vbus(true)` |
 | `MODE_USB` | VBUS 移除 | 记忆模式 | `bridge_mode_on_vbus(false)` |
 | `MODE_BLE` | `SET_MODE(2G4)` | `MODE_2G4` | `bridge_mode_set()` → `bridge_ble_deinit()` + `bridge_rf24_init()` |
@@ -456,7 +455,7 @@ uint16_t Bridge_ProcessEvent(uint8_t task_id, uint16_t events)
 | 任意 | 空闲 > `T_idle` | `MODE_SLEEP` | `bridge_mode_tick()` → `bridge_power_enter_sleep()` |
 | `MODE_SLEEP` | 唤醒源 | 原模式 | `bridge_power_on_wakeup()` |
 | 任意 | `SET_TEST_MODE(1)` | `MODE_TEST` | `cmd_set_test_mode()` → `bridge_hid_release_all()` + 关正常射频 + `bridge_test_set_mode()` |
-| `MODE_TEST` | `SET_TEST_MODE(0)` | 按 `MODE_SEL` | `cmd_set_test_mode()` → 退出定频，重新初始化射频 |
+| `MODE_TEST` | `SET_TEST_MODE(0)` | 板级缺省（键盘 USB / Dongle 2G4） | `cmd_set_test_mode()` → 退出定频，重新初始化射频 |
 
 ### 6.2 切换事务的强制顺序
 
@@ -486,8 +485,6 @@ if (bridge_vbus_present && m != BRIDGE_MODE_USB && m != BRIDGE_MODE_OTA)
 | 中断 | 优先级 | 落点 | 动作 |
 |---|---|---|---|
 | UART RX | 最高 | `UARTx_IRQHandler` | `bridge_uart_isr_feed(byte)` → `tmos_set_event(task, UART_RX_EVT)` |
-| `MODE_SEL` GPIO | 次高 | `GPIOx_IRQHandler` | `tmos_set_event(task, MODE_SWITCH_EVT)` |
-| ADC | 低 | `ADC_IRQHandler` | 置标志，任务中取值 |
 | BLE（BB/LLE） | 由栈管理 | SDK 内部 | 经 `SYS_EVENT_MSG` 转 `bridge_ble_on_*` |
 | WDOG | — | 硬件复位 | — |
 
@@ -512,10 +509,10 @@ int main(void)
     bridge_log_init(BRIDGE_LOG_BAUD); /* 1b. 日志（D13；ENABLE=0 时为空实现） */
     LOG_I("main", "boot, ver=%s", BRIDGE_FW_VERSION);
 
-    bridge_gpio_init();            /* 2. 控制引脚（先读 MODE_SEL） */
+    bridge_gpio_init();            /* 2. 控制引脚（WAKE + 未用引脚归位） */
     bridge_uart_init(2000000);     /* 3. 桥接串口 */
     bridge_cfg_load();             /* 4. 读配置与绑定元数据（含日志等级） */
-    bridge_mode_init();            /* 5. 依 MODE_SEL + 记忆定初始模式 */
+    bridge_mode_init();            /* 5. 按板级缺省（键盘=USB / Dongle=2G4）定初始模式 */
 
     CH58x_BLEInit();               /* 6. BLE 协议栈初始化 */
     HAL_Init();
@@ -578,23 +575,16 @@ int main(void)
 #define BRIDGE_PIN_GPIOA          GPIOA
 #define BRIDGE_PIN_GPIOB          GPIOB
 
-#define BRIDGE_PIN_MODE_SEL0      GPIO_Pin_12   /* PB12 (pin 11) 输入 */
-#define BRIDGE_PIN_MODE_SEL1      GPIO_Pin_13   /* PB13 (pin 10) 输入 */
 #define BRIDGE_PIN_WAKE           GPIO_Pin_5    /* PA5  (pin 24) 输出，高有效 */
-#define BRIDGE_PIN_LINK           GPIO_Pin_13   /* PA13 (pin 27) 输出，可选 */
-#define BRIDGE_PIN_CHRG           GPIO_Pin_15   /* PA15 (pin 25) 输入 */
-#define BRIDGE_PIN_BAT_ADC        GPIO_Pin_14   /* PA14 (pin 26) ADC ch4 (AIN4) */
-#define BRIDGE_ADC_CH_BAT         4             /* BAT_ADC 对应 ADC 通道 */
 
 /* 量产 ISP 配置引脚：必须 10k 上拉，上电不得被拉低，否则进 BootLoader */
 #define BRIDGE_PIN_ISP_CFG        GPIO_Pin_22   /* PB22 (pin 17) */
 
-/* 调试串口 = printf 日志通道（D13），非必需但建议留焊盘 */
+/* 调试串口 = printf 日志通道（D13，仅 TX），非必需但建议留焊盘 */
 #define BRIDGE_PIN_DBG_TX         GPIO_Pin_7    /* PB7  (pin 14) UART0 TXD */
-#define BRIDGE_PIN_DBG_RX         GPIO_Pin_4    /* PB4  (pin 15) UART0 RXD */
 
-/* 未使用 GPIO 统一配置为输入+下拉（省电），见 pinmap 第 6 章 */
-#define BRIDGE_UNUSED_GPIO_MODE   GPIO_ModeIN_PD
+/* 未使用 GPIO 统一配置为推挽输出低（省电、防悬空干扰），见 pinmap 第 6 章 */
+#define BRIDGE_UNUSED_GPIO_MODE   GPIO_ModeOut_PP_5mA
 
 /* ---------- 超时 ---------- */
 #define BRIDGE_PING_PERIOD_MS     1000
@@ -695,7 +685,7 @@ LD 文件约束（与规格 10.4 对应）：
 | 实际文件 | 对应设计稿 | 说明 |
 |---|---|---|
 | `core/bridge_{app,uart,proto,mode,hid,power,cfg,test,log,ringbuf,crc16}.c` | `APP/bridge_*.c` | 改名并新增 `bridge_app.*`（主循环编排）、`bridge_ringbuf.*`、`bridge_crc16.*`；**`bridge_gpio.*` 未单列**，GPIO 并入 `bridge_port.h` 的 `port_gpio_*` |
-| `port/ch58x/bridge_port_ch58x.c` | `bridge_ble.c` / `bridge_rf24.c` / `bridge_gpio.c` 的 SDK 侧 | 实现 `hal/bridge_port.h`：串口数据面、时间、NV、ADC、GPIO、系统控制、主循环 |
+| `port/ch58x/bridge_port_ch58x.c` | `bridge_ble.c` / `bridge_rf24.c` / `bridge_gpio.c` 的 SDK 侧 | 实现 `hal/bridge_port.h`：串口数据面、时间、NV、GPIO、系统控制、主循环 |
 | `port/ch58x/bridge_radio_ch58x.c` | `bridge_ble.c` + `bridge_rf24.c` | 射频统一入口 `port_radio_*`，BLE 与 2.4G 由 `mode` 参数区分 |
 | `port/ch58x/bridge_ch58x_callbacks.c` | `bridge_ble.c` / `bridge_rf24.c` 的回调 | **新增拆分**：`sdk_ble_on_led_report` / `sdk_rf24_on_recv` / `sdk_rf24_on_link` / `sdk_usb_on_led_report` 四个回调**不含 SDK 头**，抽出以便纳入主机验证 |
 | `port/ch58x/bridge_ch58x_sdk.{c,h}` | — | **新增**：BLE/系统原语边界（三个 SDK 头边界文件之一），`#include` WCH SDK 头 |
@@ -727,7 +717,7 @@ LD 文件约束（与规格 10.4 对应）：
 | 层 | 替身 | 覆盖内容 | 产物 |
 |---|---|---|---|
 | core | `test_host/port_host.c` 顶替**整个 port 层** | 协议帧机、D14 带宽预算、HID 去重/NKRO 降级、模式切换 6 步事务、日志开关 | `build/<role>/bridge_test_<role>` |
-| port | `test_host/sdk_stub.c` 顶替 **WCH SDK** | 串口 FIFO 背压与 ISR 读空、NV 256B 读-改-写与邻槽保护、ADC 分压、GPIO 模式/极性、MAC/复位/进 ISP、射频参数与事件翻译、厂商回调翻译、休眠判定、配对键去抖、`port_radio_pair_stop` 参数/状态校验与幂等 | `build/<role>/bridge_port_test_<role>` |
+| port | `test_host/sdk_stub.c` 顶替 **WCH SDK** | 串口 FIFO 背压与 ISR 读空、NV 256B 读-改-写与邻槽保护、GPIO 模式/极性（含已裁剪引脚归位）、MAC/复位/进 ISP、射频参数与事件翻译、厂商回调翻译、休眠判定、配对键去抖、`port_radio_pair_stop` 参数/状态校验与幂等 | `build/<role>/bridge_port_test_<role>` |
 | SDK | 无（三个边界文件 `bridge_ch58x_sdk.c` / `bridge_rf24_ch58x.c` / `bridge_usb_ch58x.c` 均无法主机编译） | 靠文件内 `TODO(核实)` 清单 + 真机比对，见 12.5 | — |
 
 ```bash
@@ -806,8 +796,8 @@ make -C wireless/bridge_fw/test_host DONGLE=1 test # dongle 角色
     键盘侧接收后中继给 Dongle，Dongle 侧按同类型前缀本地生效
   - **上电应用**：`bridge_app_init()` 读回持久化的名称 / VID-PID 下发端口层
     （`app_apply_ident()`，仅在与编译期默认值不同时才下发，避免默认配置下多余 USB 重枚举）
-  - **外部电量**：`CMD_SET_BATTERY` 0x1C / `SET_CONFIG` key 0x05 → `BRIDGE_BATT_SRC_EXTERNAL`，
-    由 SK32 上传（`bridge_power.c` 已按该源选择，含 `flags` bit0 充电状态）
+  - **电量/充电状态**：`CMD_SET_BATTERY` 0x1C（`[percent][flags]`，bit0=充电中）为唯一来源；
+    模组无 ADC / 无 CHRG_STAT，不做本地采样，也不再上报 `EVT_BATTERY`
 - 目标侧构建：本仓库已内置 SDK submodule（`sdk/ch583` @ bd508ad7），
   工具链需 `riscv-none-embed-`（本机 MounRiver Studio2）或 `riscv-wch-elf-`；
   M0~M8 的实机验证项（第 10 章）仍全部待执行。
@@ -825,10 +815,9 @@ make -C wireless/bridge_fw/test_host DONGLE=1 test # dongle 角色
   - 上电应用：`bridge_app_init()` → `app_apply_ident()`，仅在持久值与编译期默认值
     （`BRIDGE_BLE_NAME_DEFAULT` / `BRIDGE_USB_NAME_DEFAULT` / `BRIDGE_USB_VID` /
     `BRIDGE_USB_PID`）不同时才下发，避免默认配置下每次上电多一次 USB 重枚举。
-- **外部电量**：`CMD_SET_BATTERY` 0x1C（cycle 内下发 `[percent][flags]`，`flags` bit0=充电中）或
-    `SET_CONFIG` key 0x05 置 `BRIDGE_BATT_SRC_EXTERNAL`(2)；`bridge_power.c` 在
-    `AUTO` 下"外部有效则用外部"，在 `EXTERNAL` 下仅用 SK32 上传值，本地 ADC 不参与；
-    外部有效时充电状态同样取自外部上传的 `flags`（否则取本地 `CHRG_STAT`）。
+- **电量/充电状态**：`CMD_SET_BATTERY` 0x1C（cycle 内下发 `[percent][flags]`，`flags` bit0=充电中）。
+    模组不做本地采样（无 ADC / 无 CHRG_STAT），`bridge_power.c` 只缓存该值并供
+    `EVT_STATE.battery%` 与 BLE BAS 使用；不再有 `battery_src` 配置键与 `EVT_BATTERY`。
 - **2.4G 跳频：未启用**（`BRIDGE_FEATURE_RF24_HOP=0`，`RF24_HOP_PERIOD=0`，仅作将来接入自定义跳频的
   预留开关）。厂商 `RF_PHY_Hop` 例程中 `RF_FrequencyHoppingTx(resendCount)` /
   `RF_FrequencyHoppingRx(timeoutMS)` 均**不带应用载荷**，是 TX 端每周期全通道遍历、RX 端每周期

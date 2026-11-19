@@ -54,8 +54,6 @@
     ch.check(mac.bytes.length === 6 && mac.bytes.some(function (b) { return b !== 0; }), 'GET_MAC=' + mac.mac);
     await c.ping();
     ch.check(true, 'PING → PONG');
-    var adc = await c.getAdcMv();
-    ch.check(adc.mv > 0 && adc.mv < 5000, 'GET_ADC=' + adc.mv + 'mV');
 
     /* 无应答快速路径：HID 五类 + 透传（仅验证不抛错、链路保持） */
     await c.hidRelease();
@@ -98,8 +96,6 @@
       await c.setLogLevel(4);       ch.check(true, 'LOG_LEVEL=4 → ACK');
       await c.setAdvNameMac(true);  ch.check(true, 'ADV_NAME_MAC=1 → ACK');
       await c.setAdvNameMac(false); ch.check(true, 'ADV_NAME_MAC 恢复 0');
-      await c.setBatterySrc(F.BATT_SRC.EXTERNAL); ch.check(true, 'BATTERY_SRC=EXTERNAL → ACK');
-      await c.setBatterySrc(F.BATT_SRC.AUTO);     ch.check(true, 'BATTERY_SRC 恢复 AUTO');
     } catch (e) {
       ch.check(false, 'SET_CONFIG 出错', e.message);
     }
@@ -217,9 +213,9 @@
 
   /* ---------------- 场景注册（顺序即 UI 顺序） ---------------- */
   var LIST = [
-    { id: 'smoke', label: 'smoke · 基础与全指令冒烟', hint: '版本/状态/MAC/ADC/PING + HID 五类 + 透传 + 越界参数', destructive: false, run: smoke },
+    { id: 'smoke', label: 'smoke · 基础与全指令冒烟', hint: '版本/状态/MAC/PING + HID 五类 + 透传 + 越界参数', destructive: false, run: smoke },
     { id: 'nv', label: 'nv · 用户 NV 读写', hint: '32B 单元写-读回(0/1/30/45) + 越界 ERR(PARAM)', destructive: false, run: nv },
-    { id: 'config', label: 'config · SET_CONFIG 五项', hint: '五项键（跑完恢复默认）+ 未知键 ERR(PARAM)', destructive: false, run: config },
+    { id: 'config', label: 'config · SET_CONFIG 配置键', hint: '配置键（跑完恢复默认）+ 未知键 ERR(PARAM)', destructive: false, run: config },
     { id: 'battery', label: 'battery · 电量注入', hint: 'SET_BATTERY(66, 充电中) → EVT_STATE + GET_STATUS 一致', destructive: false, run: battery },
     { id: 'sleep', label: 'sleep · 睡眠分级', hint: 'IDLE/DEEP/WAKE 分级行为（DEEP 唤醒容错）', destructive: false, run: sleepScn },
     { id: 'pair_2g4', label: 'pair_2g4 · 2.4G 配对', hint: '需 Dongle 已进配对窗口（键盘发起）', destructive: false, run: pair2g4 },

@@ -1,5 +1,5 @@
-/* 载荷解码 —— GET_STATUS/GET_MODE/GET_VERSION/GET_MAC/GET_ADC/GET_DIAG/HID_DIAG/EVT_STATE/EVT_LEDS/
- * EVT_BATTERY/EVT_PAIR_RESULT/EVT_ERROR/EVT_HOST_POWER/EVT_TUNNEL_USB|BLE/NV_READ/
+/* 载荷解码 —— GET_STATUS/GET_MODE/GET_VERSION/GET_MAC/GET_DIAG/HID_DIAG/EVT_STATE/EVT_LEDS/
+ * EVT_PAIR_RESULT/EVT_ERROR/EVT_HOST_POWER/EVT_TUNNEL_USB|BLE/NV_READ/
  * SET_CONFIG 等（SPEC §4.6/§4.9/§4.10）。
  *
  * 依据 tools/sk32sim/client.py 的字段语义实现；所有函数对短载荷容错（缺失字节补 0）。
@@ -81,7 +81,6 @@
     return parts.join(' ');
   }
   function decodeMac(p) { return { mac: macStr(p), bytes: p }; }
-  function decodeAdc(p) { return { mv: u16le(p, 0) }; }
   function decodeNvRead(p) { return { addr: p[0] || 0, data: p.slice(1) }; }
   /* GET_DIAG 应答：24B 2.4G 射频诊断（bridge_ch58x_sdk.h sdk_rf24_diag()；[6..23] 均 LE16） */
   function decodeDiag(p) {
@@ -140,11 +139,6 @@
     var s = p[0] || 0;
     return { state: s, num: !!(s & 0x01), caps: !!(s & 0x02), scroll: !!(s & 0x04) };
   }
-  /* EVT_BATTERY：[mv u16 LE][pct u8][flags u8]（bridge_types.h BRIDGE_BATT_FLAG_*，bit0 = 充电中） */
-  function decodeBattery(p) {
-    var flags = p.length >= 4 ? (p[3] || 0) : 0;
-    return { mv: u16le(p, 0), percent: p[2] || 0, flags: flags, charging: !!(flags & 0x01) };
-  }
   function decodePairResult(p) { return { result: p[0] || 0, ok: (p[0] || 0) === 0, profile: p[1] || 0 }; }
   function decodeError(p) { return { code: p[0] || 0, name: F.errCodeName(p[0] || 0) }; }
   /* EVT_HOST_POWER：[state]（0=运行/唤醒，1=挂起；bridge_types.h BRIDGE_HOST_*） */
@@ -161,7 +155,6 @@
       case F.CFG_KEY.LOG_LEVEL: return { key: key, name: 'LOG_LEVEL', value: v[0] || 0 };
       case F.CFG_KEY.ADV_NAME_MAC: return { key: key, name: 'ADV_NAME_MAC', value: v[0] || 0 };
       case F.CFG_KEY.CONN_INTERVAL: return { key: key, name: 'CONN_INTERVAL', value: v[0] || 0, unit: '×1.25ms' };
-      case F.CFG_KEY.BATTERY_SRC: return { key: key, name: 'BATTERY_SRC', value: v[0] || 0 };
       case F.CFG_KEY.SLEEP_POLICY: return { key: key, name: 'SLEEP_POLICY', value: v[0] || 0 };
       default: return { key: key, name: '0x' + hex2(key), value: null, hex: F.bytesToHex(v) };
     }
@@ -201,13 +194,11 @@
       case F.CMD.GET_WIRELESS_STATE: return decodeWirelessState(p);
       case F.CMD.GET_BLE_SLOTS: return decodeBleSlots(p);
       case F.CMD.GET_MAC: return decodeMac(p);
-      case F.CMD.GET_ADC: return decodeAdc(p);
       case F.CMD.NV_READ: return decodeNvRead(p);
       case F.CMD.GET_DIAG: return decodeDiag(p);
       case F.CMD.HID_DIAG: return decodeHidDiag(p);
       case F.EVT.STATE: return decodeState(p);
       case F.EVT.LEDS: return decodeLeds(p);
-      case F.EVT.BATTERY: return decodeBattery(p);
       case F.EVT.PAIR_RESULT: return decodePairResult(p);
       case F.EVT.ERROR: return decodeError(p);
       case F.EVT.HOST_POWER: return decodeHostPower(p);
@@ -238,7 +229,6 @@
           return stxt;
         }
         case F.CMD.GET_MAC: return 'MAC ' + macStr(p);
-        case F.CMD.GET_ADC: return 'ADC ' + u16le(p, 0) + ' mV';
         case F.CMD.GET_MODE: {
           var md = decodeMode(p);
           return '模式=' + md.modeName + ' 连接=' + (md.connected ? '是' : '否') + ' 射频=' + md.radioName;
@@ -251,10 +241,6 @@
         case F.EVT.LEDS: {
           var l = decodeLeds(p);
           return 'LED Num=' + (l.num ? 1 : 0) + ' Caps=' + (l.caps ? 1 : 0) + ' Scroll=' + (l.scroll ? 1 : 0);
-        }
-        case F.EVT.BATTERY: {
-          var b = decodeBattery(p);
-          return '电量 ' + b.mv + ' mV / ' + b.percent + '%' + (b.charging ? ' 充电中' : '');
         }
         case F.EVT.PAIR_RESULT: {
           var r = decodePairResult(p);
@@ -301,10 +287,10 @@
     decodeWirelessState: decodeWirelessState,
     decodeBleSlots: decodeBleSlots, bleSlotsText: bleSlotsText,
     decodeMac: decodeMac,
-    decodeAdc: decodeAdc, decodeNvRead: decodeNvRead,
+    decodeNvRead: decodeNvRead,
     decodeDiag: decodeDiag, diagText: diagText,
     decodeHidDiag: decodeHidDiag, hidDiagText: hidDiagText,
-    decodeState: decodeState, decodeLeds: decodeLeds, decodeBattery: decodeBattery,
+    decodeState: decodeState, decodeLeds: decodeLeds,
     decodePairResult: decodePairResult, decodeError: decodeError,
     decodeHostPower: decodeHostPower,
     decodeConfigValue: decodeConfigValue,

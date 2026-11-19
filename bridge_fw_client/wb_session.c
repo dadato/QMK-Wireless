@@ -278,18 +278,6 @@ static void handle_evt_leds(const wb_frame_t *f) {
     }
 }
 
-static void handle_evt_battery(const wb_frame_t *f) {
-    if (f->len >= 3u) {
-        s_batt_mv  = (uint16_t)f->payload[0] | ((uint16_t)f->payload[1] << 8);
-        s_batt_pct = f->payload[2];
-        if (f->len >= 4u) {
-            s_batt_charging = (f->payload[3] & WB_BATT_FLAG_CHARGING) != 0u;
-        }
-        wb_batt_eval();
-        wb_emit_state();
-    }
-}
-
 /* Last EVT_ERROR code, cached with a display window so the OLED can show it
  * without the user catching the frame live, and bubbled to the board op. */
 static void handle_evt_error(const wb_frame_t *f) {
@@ -391,7 +379,6 @@ void wb_on_frame(const wb_frame_t *f) {
     switch (f->cmd) {
         case WB_EVT_STATE:       handle_evt_state(f);   ack_event(f); break;
         case WB_EVT_LEDS:        handle_evt_leds(f);    ack_event(f); break;
-        case WB_EVT_BATTERY:     handle_evt_battery(f); break;
         case WB_EVT_PAIR_RESULT: handle_evt_pair_result(f); ack_event(f); break;
         case WB_EVT_ERROR:       handle_evt_error(f); ack_event(f); break;
         case WB_EVT_HOST_POWER:  handle_evt_host_power(f); ack_event(f); break;
@@ -401,8 +388,8 @@ void wb_on_frame(const wb_frame_t *f) {
 #endif
         case WB_CMD_GET_STATUS:
             /* ACK reply to our own CMD_GET_STATUS (sent at init / on demand):
-             * [mode][connected][profile][battery%][sleep_policy].  The battery
-             * mv value is not in this reply; it comes from EVT_BATTERY. */
+             * [mode][connected][profile][battery%][sleep_policy]. 电池电压
+             * 不再由模组上报（模组无 ADC），百分比即本端下发的值。 */
             if (((f->flags & WB_FLAG_ACK) != 0u) && f->len >= 5u) {
                 if (f->payload[0] != WB_MODE_SLEEP) {
                     s_mode = f->payload[0];
@@ -482,9 +469,6 @@ static void wb_module_setup(void) {
     wb_delay_ms(6u);
     wb_cmd(WB_CMD_SET_CONFIG,
            (const uint8_t[2]){WB_CFG_KEY_SLEEP_POLICY, WB_SLEEP_POLICY_MANUAL}, 2u);
-    wb_delay_ms(6u);
-    wb_cmd(WB_CMD_SET_CONFIG,
-           (const uint8_t[2]){WB_CFG_KEY_BATTERY_SRC, WB_BATT_SRC_EXTERNAL}, 2u);
     wb_delay_ms(6u);
     /* USB identity = wired identity (keyboard.json usb.vid/pid), little-endian. */
     wb_cmd(WB_CMD_SET_USB_ID,

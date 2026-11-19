@@ -3,7 +3,7 @@
  * 与 main_test.c 的分工：
  *   main_test.c  —— port_host.c 顶替整个 port 层，验证 core/（协议/状态机/时序）
  *   port_test.c  —— sdk_stub.c 顶替 WCH SDK，验证 port 层本身
- *                   （串口 FIFO 背压、NV 布局与读-改-写、ADC 分压、
+ *                   （串口 FIFO 背压、NV 布局与读-改-写、
  *                    GPIO 模式与极性、射频参数翻译、回调翻译、休眠判定）
  *
  * 编译运行见 test_host/Makefile 的 `make test`（键盘/Dongle 两角色各跑一遍）。
@@ -105,16 +105,6 @@ static int tx_find(uint8_t cmd, uint8_t *out_payload, uint8_t *out_len)
 }
 #endif /* !BRIDGE_BOARD_IS_DONGLE */
 
-#if BRIDGE_BOARD_HAS_MODE_SEL
-static void reset_mode_sel(uint8_t sel)
-{
-    stub_gpio_set_in(BRIDGE_PIN_MODE_SEL0_PORT, BRIDGE_PIN_MODE_SEL0_NUM,
-                     (sel & 0x01u) != 0u);
-    stub_gpio_set_in(BRIDGE_PIN_MODE_SEL1_PORT, BRIDGE_PIN_MODE_SEL1_NUM,
-                     (sel & 0x02u) != 0u);
-}
-#endif
-
 /* ---------------- 用例 ---------------- */
 
 /* 必须是本进程第一次触发 UART0 写入（port 层静态 s_log_ready 只在首次调用时置位） */
@@ -206,10 +196,7 @@ static void test_uart_tx_backpressure(void)
 
     /* 环满：128B 写入 96B 的 TX 环 → 只保留前 95B（环形缓冲留 1B 区分满/空） */
     stub_reset();
-#if BRIDGE_BOARD_HAS_MODE_SEL
-    reset_mode_sel(1u);                 /* 01 = BLE：与 bridge_mode_init 采样值一致 */
-#endif
-    bridge_ch58x_init();                /* 完整上电：core 模式状态机就位，MODE_SEL 不再变化 */
+    bridge_ch58x_init();                /* 完整上电：core 模式状态机就位（缺省 USB） */
     for (uint8_t i = 0u; i < 8u; i++) {
         bridge_ch58x_loop();
         stub_u1_tx_drain();
@@ -357,27 +344,10 @@ static void test_nv_param_and_errors(void)
 
 static void test_battery(void)
 {
-    CASE("电池 ADC 分压还原与充电检测");
+    CASE("电源检测：桥不接电池 ADC / 充电线，VBUS 恒不报告");
 
-#if BRIDGE_BOARD_IS_DONGLE
-    CHECK_EQ(port_bat_read_mv(), 0u);           /* Dongle 无电池 */
-    CHECK_EQ(port_charger_active(), false);
-#else
-    {
-        uint32_t a0 = stub_adc_reads();
-        stub_adc_set_mv(BRIDGE_ADC_CH_BAT, 2100u);
-        CHECK_EQ(port_bat_read_mv(), 4200u);    /* 分压 DEN/NUM = 2/1 → ×2 */
-        CHECK_EQ(stub_adc_reads(), a0 + 1u);
-        stub_adc_set_mv(BRIDGE_ADC_CH_BAT, 1800u);
-        CHECK_EQ(port_bat_read_mv(), 3600u);
-    }
-    /* CHRG_STAT 低有效 */
-    stub_gpio_set_in(BRIDGE_PIN_CHRG_PORT, BRIDGE_PIN_CHRG_NUM, true);
-    CHECK(!port_charger_active());
-    stub_gpio_set_in(BRIDGE_PIN_CHRG_PORT, BRIDGE_PIN_CHRG_NUM, false);
-    CHECK(port_charger_active());
-    stub_gpio_set_in(BRIDGE_PIN_CHRG_PORT, BRIDGE_PIN_CHRG_NUM, true);
-#endif
+    /* 电池电量与充电状态只走 CMD_SET_BATTERY 命令（core/bridge_power.c），
+     * port 层不再提供采样接口。 */
 
     /* pinmap 第 5 章：VBUS 由 SK32 检测，桥不参与（否则无线模式会被永久拒绝） */
     CHECK(!port_vbus_present());
@@ -395,73 +365,62 @@ static void test_gpio(void)
              STUB_GPIO_IN_PU);
 
 #if BRIDGE_BOARD_IS_DONGLE
-    /* Dongle：无 MODE_SEL 拨码，port 层不得引用该引脚（BRIDGE_BOARD_HAS_MODE_SEL=0） */
-    CHECK_EQ(port_gpio_read_mode_sel(), 0u);
-
+    /* Dongle：LED_STAT 输出、PAIR_KEY 上拉输入 */
     CHECK_EQ(stub_gpio_mode(BRIDGE_PIN_LED_STAT_PORT, BRIDGE_PIN_LED_STAT_NUM),
              STUB_GPIO_OUT);
     CHECK(!stub_gpio_get_out(BRIDGE_PIN_LED_STAT_PORT, BRIDGE_PIN_LED_STAT_NUM));
     CHECK_EQ(stub_gpio_mode(BRIDGE_PIN_PAIR_KEY_PORT, BRIDGE_PIN_PAIR_KEY_NUM),
              STUB_GPIO_IN_PU);
 #else
-    /* MODE_SEL0/1：内部下拉输入（悬空 = 00 = USB 默认模式） */
-    CHECK_EQ(stub_gpio_mode(BRIDGE_PIN_MODE_SEL0_PORT, BRIDGE_PIN_MODE_SEL0_NUM),
-             STUB_GPIO_IN_PD);
-    CHECK_EQ(stub_gpio_mode(BRIDGE_PIN_MODE_SEL1_PORT, BRIDGE_PIN_MODE_SEL1_NUM),
-             STUB_GPIO_IN_PD);
-
-    CHECK_EQ(stub_gpio_mode(BRIDGE_PIN_CHRG_PORT, BRIDGE_PIN_CHRG_NUM), STUB_GPIO_IN_PU);
+    /* 键盘侧：仅 WAKE 输出；MODE_SEL / LINK / CHRG / BAT_ADC 均已裁掉 */
     CHECK_EQ(stub_gpio_mode(BRIDGE_PIN_WAKE_PORT, BRIDGE_PIN_WAKE_NUM), STUB_GPIO_OUT);
     CHECK(!stub_gpio_get_out(BRIDGE_PIN_WAKE_PORT, BRIDGE_PIN_WAKE_NUM));
-    CHECK_EQ(stub_gpio_mode(BRIDGE_PIN_LINK_PORT, BRIDGE_PIN_LINK_NUM), STUB_GPIO_OUT);
-    CHECK(!stub_gpio_get_out(BRIDGE_PIN_LINK_PORT, BRIDGE_PIN_LINK_NUM));
-    CHECK_EQ(stub_gpio_mode(BRIDGE_PIN_BAT_ADC_PORT, BRIDGE_PIN_BAT_ADC_NUM),
-             STUB_GPIO_IN_FLOAT);
-
-    /* MODE_SEL 编码：bit0 = SEL0，bit1 = SEL1 */
-    reset_mode_sel(0u);
-    CHECK_EQ(port_gpio_read_mode_sel(), 0u);
-    reset_mode_sel(1u);
-    CHECK_EQ(port_gpio_read_mode_sel(), 1u);
-    reset_mode_sel(2u);
-    CHECK_EQ(port_gpio_read_mode_sel(), 2u);
-    reset_mode_sel(3u);
-    CHECK_EQ(port_gpio_read_mode_sel(), 3u);
-    reset_mode_sel(0u);
 #endif
 
     /* 未使用引脚：推挽输出低。SDI（PB14/PB15）与 RST#（PB23）严禁改动 */
     CHECK_EQ(stub_gpio_mode('B', 14), STUB_GPIO_IN_PU);   /* SDI TIO 未被改动 */
     CHECK_EQ(stub_gpio_mode('B', 15), STUB_GPIO_IN_PU);   /* SDI TCK 未被改动 */
     CHECK_EQ(stub_gpio_mode('B', 23), STUB_GPIO_IN_PU);   /* RST# 未被改动 */
+
+    /* 已裁剪功能的引脚必须回到推挽输出低 */
+    CHECK_EQ(stub_gpio_mode('B', 4), STUB_GPIO_OUT);      /* PB4  UART0 RX 已裁 */
+    CHECK(!stub_gpio_get_out('B', 4));
+    CHECK_EQ(stub_gpio_mode('B', 12), STUB_GPIO_OUT);     /* PB12 MODE_SEL0 已裁 */
+    CHECK(!stub_gpio_get_out('B', 12));
+    CHECK_EQ(stub_gpio_mode('B', 13), STUB_GPIO_OUT);     /* PB13 MODE_SEL1 已裁 */
+    CHECK(!stub_gpio_get_out('B', 13));
+    CHECK_EQ(stub_gpio_mode('A', 13), STUB_GPIO_OUT);     /* PA13 LINK 已裁 */
+    CHECK(!stub_gpio_get_out('A', 13));
+    CHECK_EQ(stub_gpio_mode('A', 14), STUB_GPIO_OUT);     /* PA14 BAT_ADC 已裁 */
+    CHECK(!stub_gpio_get_out('A', 14));
+    CHECK_EQ(stub_gpio_mode('A', 15), STUB_GPIO_OUT);     /* PA15 CHRG_STAT 已裁 */
+    CHECK(!stub_gpio_get_out('A', 15));
+
 #if BRIDGE_BOARD_IS_DONGLE
     CHECK_EQ(stub_gpio_mode('A', 8), STUB_GPIO_OUT);      /* PA8 未用 → 输出低 */
     CHECK(!stub_gpio_get_out('A', 8));
-    CHECK_EQ(stub_gpio_mode('B', 12), STUB_GPIO_OUT);     /* PB12 未用 → 输出低 */
-    CHECK(!stub_gpio_get_out('B', 12));
-#else
-    CHECK_EQ(stub_gpio_mode('A', 12), STUB_GPIO_OUT);     /* PA12 未用 → 输出低 */
-    CHECK(!stub_gpio_get_out('A', 12));
-    CHECK_EQ(stub_gpio_mode('B', 10), STUB_GPIO_OUT);     /* PB10（USB1 未用）→ 低 */
-    CHECK(!stub_gpio_get_out('B', 10));
-#endif
 
-#if BRIDGE_BOARD_IS_DONGLE
     port_gpio_set_link(true);
     CHECK(stub_gpio_get_out(BRIDGE_PIN_LED_STAT_PORT, BRIDGE_PIN_LED_STAT_NUM));
     port_gpio_set_link(false);
     CHECK(!stub_gpio_get_out(BRIDGE_PIN_LED_STAT_PORT, BRIDGE_PIN_LED_STAT_NUM));
     port_gpio_set_wake(true);           /* Dongle 无 WAKE：应为空操作 */
 #else
+    CHECK_EQ(stub_gpio_mode('A', 12), STUB_GPIO_OUT);     /* PA12 未用 → 输出低 */
+    CHECK(!stub_gpio_get_out('A', 12));
+    CHECK_EQ(stub_gpio_mode('B', 10), STUB_GPIO_OUT);     /* PB10（USB1 未用）→ 低 */
+    CHECK(!stub_gpio_get_out('B', 10));
+
     port_gpio_set_wake(true);
     CHECK(stub_gpio_get_out(BRIDGE_PIN_WAKE_PORT, BRIDGE_PIN_WAKE_NUM));
     port_gpio_set_wake(false);
     CHECK(!stub_gpio_get_out(BRIDGE_PIN_WAKE_PORT, BRIDGE_PIN_WAKE_NUM));
 
+    /* 键盘侧无 LINK：空操作，不得触碰 PA13（已归入未用引脚输出低） */
     port_gpio_set_link(true);
-    CHECK(stub_gpio_get_out(BRIDGE_PIN_LINK_PORT, BRIDGE_PIN_LINK_NUM));
+    CHECK(!stub_gpio_get_out('A', 13));
     port_gpio_set_link(false);
-    CHECK(!stub_gpio_get_out(BRIDGE_PIN_LINK_PORT, BRIDGE_PIN_LINK_NUM));
+    CHECK(!stub_gpio_get_out('A', 13));
 #endif
 }
 
@@ -515,10 +474,20 @@ static void test_chip_and_system(void)
 static void radio_baseline(void)
 {
     stub_reset();
-#if BRIDGE_BOARD_HAS_MODE_SEL
-    reset_mode_sel(1u);                 /* 01 = BLE：两角色上电模式统一，便于断言 */
+    bridge_ch58x_init();                /* 内置 bridge_mode_init → 缺省 USB（键盘）/2.4G（Dongle） */
+#if !BRIDGE_BOARD_IS_DONGLE
+    /* 键盘侧上电缺省 USB（射频关闭）：射频用例统一切到 BLE 基线，
+     * 使 core 的 s_radio_up 为真（链路事件/浅睡判据均依赖它）。 */
+    (void)bridge_mode_request((uint8_t)MODE_BLE, false);
+    /* 排空该切换产生的 EVT_STATE（软件环 + 5ms 帧间隔待发队列），
+     * 否则后续回调事件会排在它后面、在固定时间轴的用例里发不出去。 */
+    for (uint8_t i = 0u; i < 4u; i++) {
+        stub_advance_ms(BRIDGE_FRAME_MIN_GAP_MS + 1u);
+        bridge_ch58x_loop();
+        stub_u1_tx_drain();
+    }
+    stub_u1_tx_reset();
 #endif
-    bridge_ch58x_init();                /* 内置 bridge_mode_init → 会按 cfg 拉起 BLE */
     (void)port_radio_deinit(BRIDGE_RADIO_BLE);
     (void)port_radio_deinit(BRIDGE_RADIO_2G4);
     stub_radio_obs_reset();             /* 只清抓包与计数，不动已初始化/链路状态 */
@@ -719,8 +688,6 @@ static void test_radio_event(void)
 
 #if BRIDGE_BOARD_IS_DONGLE
     CHECK(stub_gpio_get_out(BRIDGE_PIN_LED_STAT_PORT, BRIDGE_PIN_LED_STAT_NUM));
-#else
-    CHECK(stub_gpio_get_out(BRIDGE_PIN_LINK_PORT, BRIDGE_PIN_LINK_NUM));
 #endif
 
     /* 未定义事件不得改变状态 */
@@ -732,8 +699,6 @@ static void test_radio_event(void)
 
 #if BRIDGE_BOARD_IS_DONGLE
     CHECK(!stub_gpio_get_out(BRIDGE_PIN_LED_STAT_PORT, BRIDGE_PIN_LED_STAT_NUM));
-#else
-    CHECK(!stub_gpio_get_out(BRIDGE_PIN_LINK_PORT, BRIDGE_PIN_LINK_NUM));
 #endif
 }
 

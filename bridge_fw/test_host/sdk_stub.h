@@ -3,7 +3,7 @@
  * 目的：port 层（bridge_port_ch58x.c / bridge_radio_ch58x.c /
  *       bridge_ch58x_callbacks.c）只依赖 bridge_ch58x_sdk.h，
  *       故用本桩顶替后即可在 PC 上真编译真运行，验证
- *       串口 FIFO 背压 / NV 读改写 / ADC 分压 / GPIO 极性 /
+ *       串口 FIFO 背压 / NV 读改写 / GPIO 极性 /
  *       射频参数翻译 / 回调翻译 等全部 port 层逻辑。
  *
  * 桩的保真约定（偏离处必须在此声明，避免"测了个假的"）：
@@ -70,19 +70,13 @@ uint32_t stub_flash_erase_count(void);
 uint32_t stub_flash_write_count(void);
 
 /* ---------------- GPIO ---------------- */
-#define STUB_GPIO_IN_FLOAT  0u
 #define STUB_GPIO_IN_PU     1u
 #define STUB_GPIO_OUT       2u
-#define STUB_GPIO_IN_PD     3u
 
 void     stub_gpio_set_all_in(bool level);
 void     stub_gpio_set_in(uint8_t port, uint8_t pin, bool level);   /* 注入外部电平 */
 bool     stub_gpio_get_out(uint8_t port, uint8_t pin);
 uint8_t  stub_gpio_mode(uint8_t port, uint8_t pin);
-
-/* ---------------- ADC ---------------- */
-void     stub_adc_set_mv(uint8_t ch, uint16_t mv);
-uint32_t stub_adc_reads(void);
 
 /* ---------------- 射频（BLE / 2.4G / USB） ---------------- */
 extern uint8_t  g_stub_ble_tx[STUB_RADIO_BUF];

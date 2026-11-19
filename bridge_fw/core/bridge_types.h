@@ -30,15 +30,14 @@
  *                              （手机 APP GATT 通道 / usevia.app 的 WebHID Vendor 通道）
  *   0x87      下发电量       → CMD_SET_BATTERY（payload [pct u8][flags u8]，见 BRIDGE_BATT_FLAG_*）
  *   0x4A/4B/4C 睡眠分级      → CMD_SLEEP
- *   0x4D      获取 ADC       → CMD_GET_ADC（应答 2B 小端 mV）
- *   0x8A/0x8B 读写 EEPROM    → CMD_NV_WRITE / CMD_NV_READ（32B/单元） */
+ *   0x8A/0x8B 读写 EEPROM    → CMD_NV_WRITE / CMD_NV_READ（32B/单元）
+ * 说明：模组不做本地电池采样，0x4D(GET_ADC) 与电量上报配置 0x26 已移除。 */
 #define CMD_TUNNEL_USB       0x18u
 #define CMD_TUNNEL_BLE       0x19u
 #define CMD_NV_WRITE         0x1Au
 #define CMD_NV_READ          0x1Bu
 #define CMD_SET_BATTERY      0x1Cu   /* 下发电量：payload [pct u8][flags u8]（BRIDGE_BATT_FLAG_*） */
 #define CMD_SLEEP            0x1Du
-#define CMD_GET_ADC          0x1Eu
 #define CMD_SET_NAME         0x1Fu   /* payload: [target][name...]，见 BRIDGE_NAME_TARGET_* */
 #define CMD_SET_USB_ID       0x20u   /* payload: [vid LE(2)][pid LE(2)] */
 
@@ -58,14 +57,6 @@
  *     deep_s：未连接且空闲达该秒数后进深睡（DEEP），0 = 禁用自动深睡。
  *   落盘保存（bridge_cfg）；仅 AUTO 策略下生效。 */
 #define CMD_SLEEP_CFG        0x25u
-
-/* 0x26 电量上报配置（EVT_BATTERY 的开关与发送机制）：
- *   payload [enable][on_change][period_s]，各 1 字节。
- *     enable    ：EVT_BATTERY 总开关，0 = 关 / 1 = 开；
- *     on_change ：电量变化时立即上报，0 = 关 / 1 = 开；
- *     period_s  ：定时上报周期，单位 S，0 = 关闭定时上报。
- *   落盘保存（bridge_cfg）；EVT_BATTERY 仅在 battery_src = LOCAL（本地 ADC）时才会上报。 */
-#define CMD_BATTERY_CFG      0x26u
 
 /* 0x2A 诊断快照（仅排障用，不在市售模组指令集内）：
  * 应答 24B 基础 + 16B UART 接收腿取证，共 42B，布局见 port/ch58x/bridge_ch58x_sdk.h
@@ -88,7 +79,6 @@
 /* ---------------- 命令码：桥 → SK32 ---------------- */
 #define EVT_STATE            0x80u
 #define EVT_LEDS             0x81u
-#define EVT_BATTERY          0x82u   /* 电量上报：payload [mv u16 LE][pct u8][flags u8]（BRIDGE_BATT_FLAG_*） */
 #define EVT_PAIR_RESULT      0x83u
 #define EVT_ERROR            0x84u
 #define EVT_TUNNEL_USB       0x85u   /* 上报透传（USB/Dongle ↔ 上位机），<=64B */
@@ -104,13 +94,8 @@
 #define BRIDGE_NAME_TARGET_BLE  0x00u   /* BLE 广播名：键盘侧本地生效 */
 #define BRIDGE_NAME_TARGET_USB  0x01u   /* Dongle USB 产品名：键盘侧经 2.4G 转发 */
 
-/* ---------------- 电量载荷标志位（EVT_BATTERY / CMD_SET_BATTERY 的 flags 字节） ---------------- */
+/* ---------------- 电量载荷标志位（CMD_SET_BATTERY 的 flags 字节） ---------------- */
 #define BRIDGE_BATT_FLAG_CHARGING 0x01u   /* bit0：正在充电 */
-
-/* ---------------- 电量来源（SET_CONFIG key 0x05） ---------------- */
-#define BRIDGE_BATT_SRC_AUTO     0u   /* 外部有效则用外部，否则本地 ADC（默认，兼容旧行为） */
-#define BRIDGE_BATT_SRC_LOCAL    1u   /* 仅本地 ADC */
-#define BRIDGE_BATT_SRC_EXTERNAL 2u   /* 仅 SK32 上传 */
 
 /* 透传单帧载荷上限（受 BRIDGE_MAX_PAYLOAD=64 限制） */
 #define BRIDGE_TUNNEL_USB_LEN  64u

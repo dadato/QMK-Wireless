@@ -63,9 +63,6 @@ def scenario_smoke(c: BridgeClient, link: BridgeLink, ch: Checks, **kw) -> None:
     c.ping()
     ch.check(True, "PING → PONG")
 
-    mv = c.get_adc_mv()
-    ch.check(0 < mv < 5000, f"GET_ADC={mv}mV")
-
     # 无应答快速路径：HID 全类型 + 透传（仅验证不抛错、链路保持）
     c.hid_release()
     c.hid_keyboard([])
@@ -99,18 +96,16 @@ def scenario_nv(c: BridgeClient, link: BridgeLink, ch: Checks, **kw) -> None:
 
 
 # ---------------------------------------------------------------------------
-# SET_CONFIG 五项
+# SET_CONFIG 配置键
 # ---------------------------------------------------------------------------
 def scenario_config(c: BridgeClient, link: BridgeLink, ch: Checks, **kw) -> None:
-    print("== SET_CONFIG：五项键（测试后恢复默认）==")
+    print("== SET_CONFIG：配置键（测试后恢复默认）==")
     try:
         c.set_report_period(8);   ch.check(True, "REPORT_PERIOD=8ms → ACK")
         c.set_report_period(1);   ch.check(True, "REPORT_PERIOD 恢复 1ms")
         c.set_log_level(4);       ch.check(True, "LOG_LEVEL=4 → ACK")
         c.set_adv_name_mac(True); ch.check(True, "ADV_NAME_MAC=1 → ACK")
         c.set_adv_name_mac(False); ch.check(True, "ADV_NAME_MAC 恢复 0")
-        c.set_battery_src(proto.BATT_SRC_EXTERNAL); ch.check(True, "BATTERY_SRC=EXTERNAL → ACK")
-        c.set_battery_src(proto.BATT_SRC_AUTO);     ch.check(True, "BATTERY_SRC 恢复 AUTO")
     except BridgeError as e:
         ch.check(False, f"SET_CONFIG 出错：{e}")
     ch.err_is(proto.ECODE_PARAM, lambda: c.set_config(0x7F, b"\x00"), "未知配置键 → ERR(PARAM)")

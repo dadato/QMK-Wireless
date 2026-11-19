@@ -30,7 +30,7 @@ uint16_t wb_tx_hid(uint8_t cmd, const uint8_t payload[], uint8_t len);
 /* Handle a decoded frame that came back from the bridge. */
 void wb_on_frame(const wb_frame_t *f);
 
-/* ---- getters (cache of the last EVT_STATE / EVT_BATTERY, etc.) ---- */
+/* ---- getters (cache of the last EVT_STATE / local battery sample, etc.) ---- */
 uint8_t  wb_mode(void);            /* WB_MODE_* */
 bool     wb_linked(void);
 uint8_t  wb_wl(void);              /* WB_WL_*  */

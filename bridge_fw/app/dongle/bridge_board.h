@@ -1,7 +1,7 @@
 /* Dongle 侧（CH582F）板级配置 —— QFN28_4x4
  *
  * 依据：wireless/bridge_fw/docs/pinmap_ch58x.md 第 4 章（Dongle 侧管脚分配）
- * Dongle 不使用 UART1 与 SK32 对接（无 SK32），仅保留调试串口，
+ * Dongle 不使用 UART1 与 SK32 对接（无 SK32），仅保留调试串口 TX，
  * 通过 USB1 向主机上报 HID。
  */
 #ifndef BRIDGE_BOARD_H
@@ -17,9 +17,8 @@
 #define BRIDGE_BOARD_LOG_LEVEL       4
 #endif
 
-/* ---- Dongle 无 SK32，也没有 MODE_SEL[1:0] 拨码：
- * port_gpio_read_mode_sel 固定返回 0（core 取 USB 值后强制回 2.4G）。 ---- */
-#define BRIDGE_BOARD_HAS_MODE_SEL    0
+/* ---- Dongle 无 SK32，也没有模式选择信号：
+ * 上电缺省 2.4G（core 的 Dongle 分支强制），无 UART 命令入口。 ---- */
 
 /* ---- Dongle 无 SK32 侧串口；此处仅给占位，避免编译期引用为空 ---- */
 #define BRIDGE_PIN_UART_RX_PORT      'A'
@@ -33,11 +32,9 @@
 #define BRIDGE_PIN_PAIR_KEY_PORT     'A'    /* PA5 pin 24 */
 #define BRIDGE_PIN_PAIR_KEY_NUM      5
 
-/* ---- 调试串口 UART0 ---- */
+/* ---- 调试串口 UART0（仅 TX） ---- */
 #define BRIDGE_PIN_DBG_TX_PORT       'B'    /* PB7 pin 14 */
 #define BRIDGE_PIN_DBG_TX_NUM        7
-#define BRIDGE_PIN_DBG_RX_PORT       'B'    /* PB4 pin 15 */
-#define BRIDGE_PIN_DBG_RX_NUM        4
 
 /* ---- 量产 ISP 配置引脚 ---- */
 #define BRIDGE_PIN_ISP_CFG_PORT      'B'    /* PB22 pin 17 */
@@ -51,15 +48,5 @@
  *      via.json 一致；默认取 KB17 0x0194/0x0463，配套 LD7_OLED 改 0x0464）---- */
 #define BRIDGE_USB_VID               0x0194u
 #define BRIDGE_USB_PID               0x0463u
-
-/* Dongle 无电池采样 */
-#define BRIDGE_PIN_BAT_ADC_PORT      'A'
-#define BRIDGE_PIN_BAT_ADC_NUM       14
-#define BRIDGE_ADC_CH_BAT            4
-#define BRIDGE_PIN_CHRG_PORT         'A'
-#define BRIDGE_PIN_CHRG_NUM          15
-
-#define BRIDGE_BAT_DIV_NUM           1
-#define BRIDGE_BAT_DIV_DEN           1
 
 #endif /* BRIDGE_BOARD_H */

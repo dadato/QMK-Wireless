@@ -112,3 +112,17 @@ CHIP_BOOT_DGL_SRC := $(ROOT)/boot/ch58x/iap_usb_main.c \
 # BOOT 额外包含路径：core/hal/本芯片适配层/BOOT 目录；接收器再加自身板级目录
 CHIP_BOOT_INC     := -I$(ROOT)/core -I$(ROOT)/hal -I$(ROOT)/port/ch58x -I$(ROOT)/boot/ch58x
 CHIP_BOOT_DGL_INC := $(CHIP_BOOT_INC) -I$(ROOT)/app/dongle
+
+# --------------------------- 芯片相关编译宏 ---------------------------------
+CHIP_CDEFS :=
+# 低功耗：CH58X_LowPower() 仅在 HAL_SLEEP==TRUE 时真正进睡（HAL/SLEEP.c 编译期开关）。
+# SDK 的 HAL/include/config.h 用 #ifndef 提供默认值 FALSE，这里用命令行宏覆盖，
+# 避免修改 SDK submodule（固定 commit）。SLEEP=0 时不定义 → 默认 FALSE → 不进睡。
+ifeq ($(SLEEP),0)
+else
+CHIP_CDEFS += -DHAL_SLEEP=TRUE
+endif
+# BLE 数据面缓冲长度：SDK HAL/MCU.c 用它填 cfg.BufMaxLen，而 ATT_MTU = BufMaxLen - 4。
+# 默认 27 → ATT_MTU=23 → 单次 notify 上限 20B，无法承载 VIA Raw HID 的 RID0 32B 报表。
+# 128 → ATT_MTU=124，既满足 RID0 32B，也给 GATT 透传服务留足余量。
+CHIP_CDEFS += -DBLE_BUFF_MAX_LEN=128

@@ -1,7 +1,8 @@
 /* printf 日志（D13）
  *
  * 硬约束（见规格 11.1 / 清单 4.11）：
- *   1. 输出**只能**走 UART0（PB4/PB7），严禁 UART1（桥数据面）
+ *   1. 输出必须与桥数据面串口分离：CH58x 用 UART0（PB4/PB7）、数据面 UART1；
+ *      FR2012A 用 UART2（PA5）、数据面 UART0（PA0/PA1）
  *   2. bridge_hid 的 0x10~0x15 转发路径内不得调用 LOG_*
  *   3. ISR 内不得调用 bridge_log_printf()
  *   4. 量产 BRIDGE_LOG_ENABLE=0 时所有 LOG_* 宏展开为空，零开销

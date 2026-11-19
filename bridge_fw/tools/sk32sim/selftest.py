@@ -173,8 +173,6 @@ class MockBridge:
         elif fr.cmd == proto.CMD_NV_READ:
             addr = fr.payload[0] if fr.payload else 0
             self._reply(fr, bytes([addr]) + self.nv.get(addr, bytes(proto.NV_UNIT)))
-        elif fr.cmd == proto.CMD_GET_ADC:
-            self._reply(fr, bytes([0xE8, 0x03]))          # 1000 mV
         elif fr.cmd == proto.CMD_FW_BEGIN:
             if len(fr.payload) == 6:
                 self.fw_total = int.from_bytes(fr.payload[0:4], "little")

@@ -37,11 +37,6 @@
 
 /* ============================ 常量 ============================ */
 
-/* ADC 参考电压（mV）：CH58x ADC 以 VDD(3.3V) 为参考。
- * ADC_ExtSingleChSampInit 不改变参考源，PGA 增益为 0dB，故按 3300mV 满量程换算。 */
-#define SDK_ADC_VREF_MV      3300u
-#define SDK_ADC_FULL_SCALE   4096u      /* 12 bit */
-
 #define SDK_TMOS_TICK_MS_NUM 5u         /* TMOS 时钟单位 = 0.625ms = 5/8 ms */
 #define SDK_TMOS_TICK_MS_DEN 8u
 
@@ -255,10 +250,10 @@ bool sdk_uart1_rx_woke(void)
 
 void sdk_uart0_init(uint32_t baud)
 {
-    /* PB7 = TXD0（先置高），PB4 = RXD0（UART0 默认映射，R16_PIN_ALTERNATE 不置位）
+    /* 仅 TX：PB7 = TXD0（先置高再切输出），PB4(RXD0) 不再配置，
+     * 由 port_gpio_init 的未用引脚表统一置为推挽输出低。
      * 硬约束：日志只能走 UART0，严禁改用 UART1（桥数据面）。 */
     GPIOB_SetBits(GPIO_Pin_7);
-    GPIOB_ModeCfg(GPIO_Pin_4, GPIO_ModeIN_PU);
     GPIOB_ModeCfg(GPIO_Pin_7, GPIO_ModeOut_PP_5mA);
 
     UART0_DefInit();
@@ -311,17 +306,6 @@ void sdk_gpio_in_pullup(uint8_t port, uint8_t pin)
     sdk_gpio_mode(port, (uint32_t)1u << pin, GPIO_ModeIN_PU);
 }
 
-void sdk_gpio_in_pulldown(uint8_t port, uint8_t pin)
-{
-    sdk_gpio_mode(port, (uint32_t)1u << pin, GPIO_ModeIN_PD);
-}
-
-void sdk_gpio_adc_in(uint8_t port, uint8_t pin)
-{
-    /* 模拟输入：浮空输入（不带上/下拉，避免影响分压） */
-    sdk_gpio_mode(port, (uint32_t)1u << pin, GPIO_ModeIN_Floating);
-}
-
 void sdk_gpio_write(uint8_t port, uint8_t pin, bool high)
 {
     sdk_gpio_write_raw(port, (uint32_t)1u << pin, high);
@@ -332,35 +316,6 @@ bool sdk_gpio_read(uint8_t port, uint8_t pin)
     uint32_t mask = (uint32_t)1u << pin;
     uint32_t v    = (port == 'B') ? GPIOB_ReadPortPin(mask) : GPIOA_ReadPortPin(mask);
     return (v != 0u);
-}
-
-/* ============================ ADC ============================ */
-
-uint16_t sdk_adc_read_mv(uint8_t ch)
-{
-    static bool    s_adc_ready;
-    static int32_t s_adc_rough;
-    int32_t        raw;
-
-    /* 用法与官方 EVT/EXAM/ADC/src/Main.c 一致：
-     *   ADC_ExtSingleChSampInit(SampleFreq_3_2, ADC_PGA_0)  外部单通道采样使能
-     *   ADC_DataCalib_Rough()                               取内部偏置，换算时加回
-     *   ADC_ChannelCfg(ch)                                  选通道（ch4 = AIN4 = PA14）
-     *   ADC_ExcutSingleConver()                             单次转换
-     * SampleFreq_3_2（3.2M 采样时钟）适配电池分压这类高阻源。 */
-    if (!s_adc_ready) {
-        ADC_ExtSingleChSampInit(SampleFreq_3_2, ADC_PGA_0);
-        s_adc_rough = (int32_t)ADC_DataCalib_Rough();
-        s_adc_ready = true;
-    }
-
-    ADC_ChannelCfg(ch);
-
-    raw = (int32_t)ADC_ExcutSingleConver() + s_adc_rough;
-    if (raw < 0) {
-        raw = 0;
-    }
-    return (uint16_t)(((uint32_t)raw * SDK_ADC_VREF_MV) / SDK_ADC_FULL_SCALE);
 }
 
 /* ============================ Flash / DataFlash ============================ */

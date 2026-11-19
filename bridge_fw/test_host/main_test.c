@@ -80,11 +80,16 @@ static void reset_all(void)
     host_name_reset();
     host_time_reset();
     host_set_vbus(false);
-    host_set_mode_sel(1u);          /* 01 = BLE */
-    host_set_bat_mv(3800u);
-    host_set_charger(false);
     host_uart_force_busy(false);
     bridge_app_init();
+
+#if BRIDGE_BOARD_IS_DONGLE
+    /* Dongle 上电缺省即 2.4G，无需切换 */
+#else
+    /* 键盘侧上电缺省 USB（射频关闭），用例统一以 BLE 作为无线基线。
+     * 用 persist=true 写入 last_mode，供 VBUS 拔出回退用例断言。 */
+    CHECK_EQ(bridge_mode_request(MODE_BLE, true), BRIDGE_OK);
+#endif
 
     /* 让上电 EVT_STATE 帧发完（12B@921600 ≈ 0.13ms），避免抢占首个用例的发送窗口 */
     host_advance_ms(BRIDGE_FRAME_MIN_GAP_MS + 5u);
@@ -93,7 +98,9 @@ static void reset_all(void)
     inject(EVT_STATE, 0u, BRIDGE_FLAG_ACK, 0, 0u);
     bridge_app_poll();
 
-    /* 用例从干净的时间轴与抓包缓冲开始 */
+    /* 用例从干净的时间轴与抓包缓冲开始；再跨过一个帧间隔，
+     * 使紧接着的 bridge_evt_state()/run_cmd() 不会因 GAP 被排队。 */
+    host_advance_ms(BRIDGE_FRAME_MIN_GAP_MS + 1u);
     host_tx_reset();
     host_log_reset();
 }
@@ -405,8 +412,14 @@ static void test_vbus_priority(void)
 {
     CASE("VBUS 优先级（规格 5.2）");
     reset_all();
-    /* 上电默认无线模式按板级：键盘=BLE / Dongle=2G4 */
-    CHECK_EQ(bridge_mode_get(), (bridge_mode_t)bridge_mode_default());
+
+    /* 板级上电缺省：键盘=USB（射频关闭，等 SK32 命令）/ Dongle=2G4 */
+#if BRIDGE_BOARD_IS_DONGLE
+    CHECK_EQ(bridge_mode_default(), (uint8_t)MODE_2G4);
+#else
+    CHECK_EQ(bridge_mode_default(), (uint8_t)MODE_USB);
+    CHECK_EQ(bridge_mode_get(), MODE_BLE);      /* reset_all 已下达基线模式 */
+#endif
 
     host_set_vbus(true);
     bridge_mode_poll();
@@ -416,10 +429,14 @@ static void test_vbus_priority(void)
     CHECK_EQ(bridge_mode_request(MODE_BLE, true), BRIDGE_ERR_VBUS);
     CHECK_EQ(bridge_mode_get(), MODE_USB);
 
-    /* 拔出后回到记忆模式 */
+    /* 拔出后回到记忆模式（reset_all 已持久化 BLE） */
     host_set_vbus(false);
     bridge_mode_poll();
-    CHECK_EQ(bridge_mode_get(), (bridge_mode_t)bridge_mode_default());
+#if BRIDGE_BOARD_IS_DONGLE
+    CHECK_EQ(bridge_mode_get(), MODE_2G4);
+#else
+    CHECK_EQ(bridge_mode_get(), MODE_BLE);
+#endif
     CHECK(bridge_mode_is_wireless());
 }
 
@@ -611,126 +628,65 @@ static void test_cfg_persist(void)
     CHECK_EQ(bridge_cfg_set_rf24_report_ms(0u), BRIDGE_ERR_PARAM);
 }
 
-static void test_battery_curve(void)
+static void test_battery_cmd_only(void)
 {
-    CASE("电量曲线与阈值");
-    CHECK_EQ(bridge_power_mv_to_percent(4200u), 100u);
-    CHECK_EQ(bridge_power_mv_to_percent(3830u), 50u);
-    CHECK_EQ(bridge_power_mv_to_percent(3700u), 20u);
-    CHECK_EQ(bridge_power_mv_to_percent(3400u), 5u);
-    CHECK_EQ(bridge_power_mv_to_percent(3000u), 0u);
+    CASE("电量/充电状态仅由 SET_BATTERY 命令输入");
 
-    reset_all();
-    host_set_bat_mv(3650u);      /* 10% → 低电告警 */
-    bridge_power_sample();
-    CHECK(bridge_power_alarm_flags() & BRIDGE_BATT_ALARM_LOW);
-    CHECK_EQ(bridge_power_battery_percent(), 10u);
-
-    host_set_bat_mv(3300u);      /* <5% → 严重告警 */
-    bridge_power_sample();
-    CHECK(bridge_power_alarm_flags() & BRIDGE_BATT_ALARM_CRIT);
-}
-
-static void test_evt_battery_report(void)
-{
-    CASE("EVT_BATTERY 上报门控（仅 LOCAL + 开关/变化/定时）");
     reset_all();
 
     uint8_t pay[8], len = 0u, flags = 0u;
 
-    /* 默认 battery_src=AUTO：不下发 EVT_BATTERY */
-    host_advance_ms(BRIDGE_BATT_SAMPLE_MS + 1u);
-    bridge_app_poll();
-    host_advance_ms(BRIDGE_FRAME_MIN_GAP_MS + 1u);
-    bridge_app_poll();
-    CHECK(!pump_find(EVT_BATTERY, &flags, pay, &len, 4u));
+    /* 未收到命令前：0%，未充电 */
+    CHECK_EQ(bridge_power_battery_percent(), 0u);
+    CHECK(!bridge_power_charger_active());
+    CHECK(!bridge_power_has_external());
 
-    /* 切 LOCAL 后立即上报（on_change 默认开），payload [mv LE16][pct][flags] */
-    CHECK_EQ(bridge_cfg_set_battery_src(BRIDGE_BATT_SRC_LOCAL), BRIDGE_OK);
-    host_advance_ms(BRIDGE_FRAME_MIN_GAP_MS + 1u);
-    bridge_app_poll();
-    host_advance_ms(BRIDGE_FRAME_MIN_GAP_MS + 1u);
-    bridge_app_poll();
-    CHECK(pump_find(EVT_BATTERY, &flags, pay, &len, 4u));
+    /* 下发电量 + 充电中：ACK + 立即 EVT_STATE（state[3] = 电量） */
+    {
+        const uint8_t p[2] = { 66u, BRIDGE_BATT_FLAG_CHARGING };
+
+        run_cmd(CMD_SET_BATTERY, 0x90u, 0u, p, 2u);
+    }
+    CHECK(pump_find(CMD_SET_BATTERY, &flags, pay, &len, 4u));
+    CHECK_EQ(flags & BRIDGE_FLAG_ACK, BRIDGE_FLAG_ACK);
+    CHECK_EQ(bridge_power_battery_percent(), 66u);
+    CHECK(bridge_power_charger_active());
+    CHECK(bridge_power_has_external());
+    CHECK(pump_find(EVT_STATE, &flags, pay, &len, 4u));
     CHECK_EQ(len, 4u);
-    CHECK_EQ(pay[0], (uint8_t)(3800u & 0xFFu));
-    CHECK_EQ(pay[1], (uint8_t)(3800u >> 8));
-    CHECK_EQ(pay[2], bridge_power_battery_percent());
-    CHECK_EQ(pay[3], bridge_power_batt_flags());
+    CHECK_EQ(pay[3], 66u);
 
-    /* 插上充电器（电量不变）→ 充电标志变化仍应上报，bit0 = 1。
-     * host_tx_find_frame 只扫描不消费，必须先清抓包窗口，否则会再次匹配到
-     * 上一段那条 flags=0 的旧帧；充电脚由采样读取，用强制采样 API 立即刷新。 */
-    host_set_charger(true);
-    bridge_power_sample();
-    host_tx_reset();
-    bridge_app_poll();
-    host_advance_ms(BRIDGE_FRAME_MIN_GAP_MS + 1u);
-    bridge_app_poll();
-    CHECK(pump_find(EVT_BATTERY, &flags, pay, &len, 4u));
-    CHECK_EQ(len, 4u);
-    CHECK_EQ(pay[3] & BRIDGE_BATT_FLAG_CHARGING, BRIDGE_BATT_FLAG_CHARGING);
-    host_set_charger(false);
-
-    /* 复位默认，避免影响后续用例 */
-    reset_all();
-}
-
-static void test_battery_cfg(void)
-{
-    CASE("BATTERY_CFG 0x26：配置/落盘/规整/非法长度");
-    reset_all();
-
-    uint8_t flags = 0u, pay[6], len = 0u;
-
-    /* 出厂默认：1（开）/ 1（变化即报）/ 10s */
-    CHECK_EQ(bridge_cfg_get()->batt_report_en, 1u);
-    CHECK_EQ(bridge_cfg_get()->batt_report_on_change, 1u);
-    CHECK_EQ(bridge_cfg_get()->batt_report_period_s, 10u);
-
-    /* 配置 0/1/30 → ACK */
+    /* 单字节（旧版）：按未充电处理；>100 截断为 100 */
     {
-        uint8_t p[3] = { 0u, 1u, 30u };
+        const uint8_t p[1] = { 200u };
 
-        run_cmd(CMD_BATTERY_CFG, 0x90u, BRIDGE_FLAG_ACK_REQ, p, 3u);
-        CHECK(pump_find(CMD_BATTERY_CFG, &flags, pay, &len, 4u));
-        CHECK_EQ(flags & BRIDGE_FLAG_ACK, BRIDGE_FLAG_ACK);
+        run_cmd(CMD_SET_BATTERY, 0x91u, 0u, p, 1u);
     }
-    CHECK_EQ(bridge_cfg_get()->batt_report_en, 0u);
-    CHECK_EQ(bridge_cfg_get()->batt_report_on_change, 1u);
-    CHECK_EQ(bridge_cfg_get()->batt_report_period_s, 30u);
+    CHECK_EQ(bridge_power_battery_percent(), 100u);
+    CHECK(!bridge_power_charger_active());
 
-    /* 落盘：重新初始化后仍保持 */
-    bridge_cfg_init();
-    CHECK_EQ(bridge_cfg_get()->batt_report_en, 0u);
-    CHECK_EQ(bridge_cfg_get()->batt_report_period_s, 30u);
-
-    /* 非 0 值规整为 1；period_s=0 表示关闭定时上报 */
-    {
-        uint8_t p[3] = { 5u, 2u, 0u };
-
-        run_cmd(CMD_BATTERY_CFG, 0x91u, BRIDGE_FLAG_ACK_REQ, p, 3u);
-        CHECK(pump_find(CMD_BATTERY_CFG, &flags, pay, &len, 4u));
-        CHECK_EQ(flags & BRIDGE_FLAG_ACK, BRIDGE_FLAG_ACK);
-    }
-    CHECK_EQ(bridge_cfg_get()->batt_report_en, 1u);
-    CHECK_EQ(bridge_cfg_get()->batt_report_on_change, 1u);
-    CHECK_EQ(bridge_cfg_get()->batt_report_period_s, 0u);
-
-    /* 非法长度（2 字节）→ ERR PARAM，值不变 */
-    host_tx_reset();
-    {
-        uint8_t p[2] = { 1u, 1u };
-
-        run_cmd(CMD_BATTERY_CFG, 0x92u, BRIDGE_FLAG_ACK_REQ, p, 2u);
-    }
-    CHECK(pump_find(CMD_BATTERY_CFG, &flags, pay, &len, 4u));
+    /* 已移除的命令 0x1E(GET_ADC) / 0x26(BATTERY_CFG) → ERR PARAM */
+    run_cmd(0x1Eu, 0x92u, BRIDGE_FLAG_ACK_REQ, 0, 0u);
+    CHECK(pump_find(0x1Eu, &flags, pay, &len, 4u));
     CHECK_EQ(flags & BRIDGE_FLAG_ERR, BRIDGE_FLAG_ERR);
     CHECK_EQ(pay[0], BRIDGE_ECODE_PARAM);
-    CHECK_EQ(bridge_cfg_get()->batt_report_en, 1u);
-    CHECK_EQ(bridge_cfg_get()->batt_report_period_s, 0u);
+    {
+        const uint8_t p[3] = { 1u, 1u, 10u };
 
-    /* 复位默认，避免影响后续用例 */
+        run_cmd(0x26u, 0x93u, BRIDGE_FLAG_ACK_REQ, p, 3u);
+    }
+    CHECK(pump_find(0x26u, &flags, pay, &len, 4u));
+    CHECK_EQ(flags & BRIDGE_FLAG_ERR, BRIDGE_FLAG_ERR);
+    CHECK_EQ(pay[0], BRIDGE_ECODE_PARAM);
+
+    /* 空载荷 SET_BATTERY → ERR PARAM，电量保持（先清抓包，避免匹配到前一次的 ACK） */
+    host_tx_reset();
+    run_cmd(CMD_SET_BATTERY, 0x94u, BRIDGE_FLAG_ACK_REQ, 0, 0u);
+    CHECK(pump_find(CMD_SET_BATTERY, &flags, pay, &len, 4u));
+    CHECK_EQ(flags & BRIDGE_FLAG_ERR, BRIDGE_FLAG_ERR);
+    CHECK_EQ(bridge_power_battery_percent(), 100u);
+
+    /* 复位，避免影响后续用例 */
     reset_all();
 }
 
@@ -1464,7 +1420,7 @@ static void test_fw_ota(void)
 
 static void test_misc_commands(void)
 {
-    CASE("下发电量 0x1C / 睡眠分级 0x1D / 按需 ADC 0x1E");
+    CASE("下发电量 0x1C / 睡眠分级 0x1D");
 
     /* 下发电量：ACK + 立即 EVT_STATE 上报（state[3] = 电量） */
     reset_all();
@@ -1478,8 +1434,7 @@ static void test_misc_commands(void)
         CHECK_EQ(flags & BRIDGE_FLAG_ACK, BRIDGE_FLAG_ACK);
         CHECK_EQ(bridge_power_has_external(), true);
         CHECK_EQ(bridge_power_battery_percent(), 77u);
-        CHECK_EQ(bridge_power_batt_flags() & BRIDGE_BATT_FLAG_CHARGING,
-                 BRIDGE_BATT_FLAG_CHARGING);
+        CHECK_EQ(bridge_power_charger_active(), true);
 
         host_tx_reset();
         bridge_evt_state();
@@ -1524,21 +1479,6 @@ static void test_misc_commands(void)
         CHECK(pump_find(CMD_SLEEP, &flags, pay, &len, 4u));
         CHECK_EQ(flags & BRIDGE_FLAG_ERR, BRIDGE_FLAG_ERR);
         CHECK_EQ(pay[0], BRIDGE_ECODE_PARAM);
-    }
-
-    /* 按需 ADC：应答 2B 小端毫伏（3999 = 0x0F9F → 9F 0F） */
-    reset_all();
-    host_set_bat_mv(3999u);
-    host_tx_reset();
-    {
-        uint8_t flags = 0u, pay[4], len = 0u;
-
-        run_cmd(CMD_GET_ADC, 0x45u, 0u, 0, 0u);
-        CHECK(pump_find(CMD_GET_ADC, &flags, pay, &len, 4u));
-        CHECK_EQ(flags & BRIDGE_FLAG_ACK, BRIDGE_FLAG_ACK);
-        CHECK_EQ(len, 2u);
-        CHECK_EQ(pay[0], 0x9Fu);
-        CHECK_EQ(pay[1], 0x0Fu);
     }
 }
 
@@ -1916,13 +1856,16 @@ static void test_rf24pair_persist(void)
 
 static void test_mode_name(void)
 {
-    CASE("模式名与 sel 映射");
+    CASE("模式名与板级缺省");
     CHECK(strcmp(bridge_mode_name(MODE_USB), "USB") == 0);
     CHECK(strcmp(bridge_mode_name(MODE_2G4), "2G4") == 0);
-    CHECK_EQ(bridge_mode_from_sel(0u), (uint8_t)MODE_USB);
-    CHECK_EQ(bridge_mode_from_sel(1u), (uint8_t)MODE_BLE);
-    CHECK_EQ(bridge_mode_from_sel(2u), (uint8_t)MODE_2G4);
-    CHECK_EQ(bridge_mode_from_sel(3u), (uint8_t)MODE_BLE_PAIR);
+    /* 上电缺省：键盘=USB（等 SK32 命令）/ Dongle=2G4 */
+#if BRIDGE_BOARD_IS_DONGLE
+    CHECK_EQ(bridge_mode_default(), (uint8_t)MODE_2G4);
+#else
+    CHECK_EQ(bridge_mode_default(), (uint8_t)MODE_USB);
+#endif
+    CHECK_EQ(bridge_mode_restore_target((uint8_t)MODE_BLE_PAIR), (uint8_t)MODE_BLE);
 }
 
 int main(void)
@@ -1953,9 +1896,7 @@ int main(void)
     test_control_queue_when_busy();
     test_log_switch();
     test_cfg_persist();
-    test_battery_curve();
-    test_evt_battery_report();
-    test_battery_cfg();
+    test_battery_cmd_only();
     test_srrc_test_mode();
     test_set_mode_via_uart();
     test_get_mode_and_heartbeat();

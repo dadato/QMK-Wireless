@@ -16,7 +16,7 @@
  *
  * 本实现：
  *   1) 电量直接取自本工程电源模块 bridge_power_battery_percent()
- *      （SK32 下发的外部电量优先，否则本地 ADC，10s 采样）；
+ *      （唯一来源：SK32 经 CMD_SET_BATTERY 下发的百分比，模组不做本地采样）；
  *   2) 读路径与周期测量路径均**双向**刷新 battLevel 并在变化时通知。
  *
  * 属性表布局（服务声明 / 电量声明 / 电量值 / 电量 CCCD / Report Reference）

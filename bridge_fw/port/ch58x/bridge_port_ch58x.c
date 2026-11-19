@@ -261,7 +261,7 @@ void port_log_write(const char *s, uint16_t len)
         return;
     }
     /* 惰性初始化：core 的 bridge_log_init(baud) 不做硬件动作（见 bridge_log.c），
-     * UART0 由 port 层在首次真正要输出时初始化，避免 release 构建白占 UART0/PB4/PB7 */
+     * UART0 由 port 层在首次真正要输出时初始化，避免 release 构建白占 UART0/PB7 */
     if (!s_log_ready) {
         sdk_uart0_init(BRIDGE_LOG_BAUD);
         s_log_ready = true;
@@ -275,7 +275,7 @@ void port_log_write(const char *s, uint16_t len)
  * 约束（见 pinmap_ch58x.md §6 与硬件铁律）：
  *   - PB14/PB15 为两线仿真（SDI 的 TIO/TCK），严禁改动；
  *   - PB23 为 RST#（外部复位输入），非 GPIO，不得驱动；
- *   - 已分配引脚（UART/USB/ADC/控制信号/ISP/调试串口）不在此列。 */
+ *   - 已分配引脚（UART/USB/控制信号/ISP/调试串口）不在此列。 */
 typedef struct {
     uint8_t port;   /* 'A' / 'B' */
     uint8_t pin;
@@ -283,27 +283,23 @@ typedef struct {
 
 static const bridge_unused_pin_t s_unused_pins[] = {
 #if BRIDGE_BOARD_IS_DONGLE
-    /* Dongle：UART1/无电池/无 MODE_SEL/LINK 等全部闲置 */
+    /* Dongle：UART1/无电池/无模式选择/无 LINK 等全部闲置 */
     { 'A', 8 }, { 'A', 9 }, { 'A', 10 }, { 'A', 11 },
     { 'A', 12 }, { 'A', 13 }, { 'A', 14 }, { 'A', 15 },
-    { 'B', 12 }, { 'B', 13 },
+    { 'B', 4 }, { 'B', 12 }, { 'B', 13 },
 #else
-    /* 键盘侧：PA10/PA11（未用 32.768kHz 晶振时释放为 GPIO）、PA12、
-     *         PB10/PB11（键盘侧不走 USB，USB1 差分对闲置） */
-    { 'A', 10 }, { 'A', 11 }, { 'A', 12 },
-    { 'B', 10 }, { 'B', 11 },
+    /* 键盘侧：未用 32.768kHz 晶振时释放为 GPIO 的 PA10/PA11、PA12、
+     *         PB10/PB11（键盘侧不走 USB，USB1 差分对闲置），
+     *         以及已裁剪功能的 PB12/PB13（MODE_SEL）、PA13（LINK）、
+     *         PA14（BAT_ADC）、PA15（CHRG_STAT）、PB4（UART0 RX） */
+    { 'A', 10 }, { 'A', 11 }, { 'A', 12 }, { 'A', 13 },
+    { 'A', 14 }, { 'A', 15 },
+    { 'B', 4 }, { 'B', 10 }, { 'B', 11 }, { 'B', 12 }, { 'B', 13 },
 #endif
 };
 
 void port_gpio_init(void)
 {
-#if BRIDGE_BOARD_HAS_MODE_SEL
-    /* MODE_SEL0/1：板级拨码，内部下拉输入（仅键盘侧存在，由 SK32 驱动；
-     * 悬空 = 00 = USB 默认模式） */
-    sdk_gpio_in_pulldown(BRIDGE_PIN_MODE_SEL0_PORT, BRIDGE_PIN_MODE_SEL0_NUM);
-    sdk_gpio_in_pulldown(BRIDGE_PIN_MODE_SEL1_PORT, BRIDGE_PIN_MODE_SEL1_NUM);
-#endif
-
     /* ISP 配置脚：量产必须保持高（外部 10k 上拉 + 内部上拉兜底） */
     sdk_gpio_in_pullup(BRIDGE_PIN_ISP_CFG_PORT, BRIDGE_PIN_ISP_CFG_NUM);
 
@@ -312,11 +308,8 @@ void port_gpio_init(void)
     sdk_gpio_out_init(BRIDGE_PIN_LED_STAT_PORT, BRIDGE_PIN_LED_STAT_NUM, false);
     sdk_gpio_in_pullup(BRIDGE_PIN_PAIR_KEY_PORT, BRIDGE_PIN_PAIR_KEY_NUM);
 #else
-    /* 键盘侧：WAKE/LINK 输出，CHRG 上拉输入，BAT_ADC 模拟输入 */
-    sdk_gpio_in_pullup(BRIDGE_PIN_CHRG_PORT, BRIDGE_PIN_CHRG_NUM);
+    /* 键盘侧：仅 WAKE 输出（唤醒请求）；电量/充电/模式选择均不走 GPIO */
     sdk_gpio_out_init(BRIDGE_PIN_WAKE_PORT, BRIDGE_PIN_WAKE_NUM, false);
-    sdk_gpio_out_init(BRIDGE_PIN_LINK_PORT, BRIDGE_PIN_LINK_NUM, false);
-    sdk_gpio_adc_in(BRIDGE_PIN_BAT_ADC_PORT, BRIDGE_PIN_BAT_ADC_NUM);
 #endif
 
     /* 其余未使用引脚：推挽输出低 */
@@ -324,25 +317,6 @@ void port_gpio_init(void)
          i < (uint32_t)(sizeof(s_unused_pins) / sizeof(s_unused_pins[0])); i++) {
         sdk_gpio_out_init(s_unused_pins[i].port, s_unused_pins[i].pin, false);
     }
-}
-
-uint8_t port_gpio_read_mode_sel(void)
-{
-#if BRIDGE_BOARD_HAS_MODE_SEL
-    uint8_t v = 0u;
-
-    if (sdk_gpio_read(BRIDGE_PIN_MODE_SEL0_PORT, BRIDGE_PIN_MODE_SEL0_NUM)) {
-        v |= 0x01u;
-    }
-    if (sdk_gpio_read(BRIDGE_PIN_MODE_SEL1_PORT, BRIDGE_PIN_MODE_SEL1_NUM)) {
-        v |= 0x02u;
-    }
-    return v;
-#else
-    /* Dongle 无 MODE_SEL：返回 0（core 视为 MODE_USB 取值 → Dongle 分支强制
-     * 回 2.4G）。Dongle 的工作模式由 2.4G 配对结果决定，不由拨码决定。 */
-    return 0u;
-#endif
 }
 
 void port_gpio_set_wake(bool active)
@@ -360,22 +334,12 @@ void port_gpio_set_link(bool connected)
     /* Dongle 用 LED_STAT 指示链路 */
     sdk_gpio_write(BRIDGE_PIN_LED_STAT_PORT, BRIDGE_PIN_LED_STAT_NUM, connected);
 #else
-    sdk_gpio_write(BRIDGE_PIN_LINK_PORT, BRIDGE_PIN_LINK_NUM, connected);
+    /* 键盘侧无 LINK 线：链路状态只经 EVT_STATE / GET_WIRELESS_STATE 上报 */
+    (void)connected;
 #endif
 }
 
 /* ============================ 电源 / 检测 ============================ */
-
-uint16_t port_bat_read_mv(void)
-{
-#if BRIDGE_BOARD_IS_DONGLE
-    return 0u;      /* Dongle 无电池 */
-#else
-    /* 分压还原：Vbat = Vadc * DEN / NUM（电阻取值见 pinmap 第 3 章，需实测标定） */
-    uint32_t mv = (uint32_t)sdk_adc_read_mv(BRIDGE_ADC_CH_BAT);
-    return (uint16_t)((mv * BRIDGE_BAT_DIV_DEN) / BRIDGE_BAT_DIV_NUM);
-#endif
-}
 
 bool port_vbus_present(void)
 {
@@ -383,16 +347,6 @@ bool port_vbus_present(void)
      * Dongle 恒由 USB 供电且 2.4G 是其正常工作模式，故同样不报告 VBUS，
      * 否则 core 的 VBUS 优先仲裁会永久拒绝无线模式。 */
     return false;
-}
-
-bool port_charger_active(void)
-{
-#if BRIDGE_BOARD_IS_DONGLE
-    return false;
-#else
-    /* CHRG_STAT 低有效（充电中 = 低） */
-    return !sdk_gpio_read(BRIDGE_PIN_CHRG_PORT, BRIDGE_PIN_CHRG_NUM);
-#endif
 }
 
 /* ============================ 芯片信息 ============================ */

@@ -501,28 +501,19 @@ void port_log_write(const char *s, uint16_t len)
 }
 
 /* ---------------- GPIO ---------------- */
-static uint8_t  s_mode_sel;
 static bool     s_vbus;
 static bool     s_wake;
 static bool     s_link;
-static uint16_t s_bat_mv = 3800u;
-static bool     s_charger;
 
 void host_set_vbus(bool present) { s_vbus = present; }
-void host_set_mode_sel(uint8_t sel) { s_mode_sel = (uint8_t)(sel & 0x03u); }
-void host_set_bat_mv(uint16_t mv) { s_bat_mv = mv; }
-void host_set_charger(bool active) { s_charger = active; }
 uint32_t host_reset_count(void) { return s_reset_count; }
 uint32_t host_bootloader_count(void) { return s_boot_count; }
 
 void port_gpio_init(void) { }
-uint8_t port_gpio_read_mode_sel(void) { return s_mode_sel; }
 void port_gpio_set_wake(bool active) { s_wake = active; (void)s_wake; }
 void port_gpio_set_link(bool connected) { s_link = connected; (void)s_link; }
 
-uint16_t port_bat_read_mv(void) { return s_bat_mv; }
 bool     port_vbus_present(void) { return s_vbus; }
-bool     port_charger_active(void) { return s_charger; }
 
 /* ---------------- 系统 ---------------- */
 void port_enter_bootloader(void) { s_boot_count++; }

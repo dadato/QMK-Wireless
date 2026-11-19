@@ -13,7 +13,6 @@ static bridge_mode_t s_mode;
 static bool          s_vbus;
 static bool          s_connected;
 static uint32_t      s_last_activity_ms;
-static uint8_t       s_gpio_sel;
 static bool          s_radio_up;
 static bool          s_sleep_permit_cmd;   /* MANUAL 策略下由 CMD_SLEEP(IDLE/DEEP) 置位 */
 static bool          s_host_awake = true;  /* 主机电源状态：true=运行/false=挂起 */
@@ -39,7 +38,9 @@ uint8_t bridge_mode_default(void)
 #if BRIDGE_BOARD_IS_DONGLE
     return (uint8_t)MODE_2G4;       /* Dongle 无 BLE：出厂默认 2.4G 接收 */
 #else
-    return (uint8_t)MODE_BLE;
+    /* 键盘侧上电缺省 USB：射频不初始化，等待 SK32 经 SET_MODE 下发工作模式。
+     * 板级已无 MODE_SEL 拨码，模式完全由命令决定。 */
+    return (uint8_t)MODE_USB;
 #endif
 }
 
@@ -146,37 +147,19 @@ static int mode_transaction(bridge_mode_t target, bool persist)
     return BRIDGE_OK;
 }
 
-uint8_t bridge_mode_from_sel(uint8_t sel)
-{
-    switch (sel & 0x03u) {
-        case 0u:  return (uint8_t)MODE_USB;
-        case 1u:  return (uint8_t)MODE_BLE;
-        case 2u:  return (uint8_t)MODE_2G4;
-        default: return (uint8_t)MODE_BLE_PAIR;   /* 11 = 保留 → 配对窗口 */
-    }
-}
-
 void bridge_mode_init(void)
 {
-    const bridge_cfg_t *cfg = bridge_cfg_get();
-    (void)cfg;   /* 仅 LOG_I 使用；LOG=0 时展开为空，避免 -Wunused-variable */
-
     s_last_activity_ms = port_millis();
     s_pair_started_ms  = port_millis();
     s_pair_timeout_s   = BRIDGE_PAIR_TIMEOUT_S;
     s_radio_up         = false;
     s_connected        = false;
     s_vbus             = port_vbus_present();
-    s_gpio_sel         = port_gpio_read_mode_sel();
 
-    /* 优先级：VBUS > GPIO SEL。SEL=00（含下拉悬空）即 USB 默认模式，
-     * 01/10/11 分别为 BLE / 2.4G / BLE_PAIR。 */
-    bridge_mode_t boot_mode;
-    if (s_vbus) {
-        boot_mode = MODE_USB;
-    } else {
-        boot_mode = (bridge_mode_t)bridge_mode_from_sel(s_gpio_sel);
-    }
+    /* 优先级：VBUS > 板级缺省。键盘侧无 MODE_SEL，上电缺省 USB（射频关闭），
+     * 由 SK32 经 SET_MODE 命令驱动；Dongle 缺省 2.4G。 */
+    bridge_mode_t boot_mode = s_vbus ? MODE_USB
+                                     : (bridge_mode_t)bridge_mode_default();
 
 #if BRIDGE_BOARD_IS_DONGLE
     /* Dongle 无 BLE：旧固件 / 默认配置若记忆为 BLE，上电强制回 2.4G */
@@ -187,9 +170,8 @@ void bridge_mode_init(void)
 #endif
 
     s_mode = boot_mode;
-    LOG_I(BRIDGE_MOD_MODE, "init vbus=%u sel=%u cfg_mode=%u -> %s",
-          (unsigned)s_vbus, s_gpio_sel, cfg->last_mode,
-          bridge_mode_name(boot_mode));
+    LOG_I(BRIDGE_MOD_MODE, "init vbus=%u -> %s",
+          (unsigned)s_vbus, bridge_mode_name(boot_mode));
 
     (void)mode_transaction(boot_mode, false);
     s_last_activity_ms = port_millis();
@@ -440,16 +422,6 @@ bool bridge_mode_host_awake(void)
 
 void bridge_mode_poll(void)
 {
-    /* MODE_SEL 运行期变化（GPIO 硬线设定，UART 命令优先） */
-    uint8_t sel = port_gpio_read_mode_sel();
-    if (sel != s_gpio_sel) {
-        s_gpio_sel = sel;
-        uint8_t want = bridge_mode_from_sel(sel);
-        if (!s_vbus || want == (uint8_t)MODE_USB) {
-            (void)bridge_mode_request(want, true);
-        }
-    }
-
     /* VBUS 直采（SK32 未同步时的兜底） */
     bool vbus = port_vbus_present();
     if (vbus != s_vbus) {

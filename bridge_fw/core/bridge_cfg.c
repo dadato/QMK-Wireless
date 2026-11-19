@@ -82,11 +82,7 @@ static void cfg_defaults(void)
     s_cfg.rf24_report_ms   = (uint16_t)(1000u / BRIDGE_RF24_REPORT_HZ);
     s_cfg.adv_name_with_mac = 1u;
     s_cfg.conn_interval    = 6u;   /* 6 * 1.25ms = 7.5ms */
-    s_cfg.battery_src      = BRIDGE_BATT_SRC_AUTO;
     s_cfg.sleep_policy     = BRIDGE_SLEEP_POLICY_MANUAL;   /* 默认关闭自动休眠：仅 CMD_SLEEP 指令控制 */
-    s_cfg.batt_report_en   = 1u;                            /* 默认开启（仅 LOCAL 源时上报） */
-    s_cfg.batt_report_on_change = 1u;                       /* 电量变化即报 */
-    s_cfg.batt_report_period_s  = 10u;                      /* 定时 10s 上报（对齐原 BRIDGE_BATT_SAMPLE_MS） */
     s_cfg.sleep_idle_s     = 1u;                            /* 1s：配合 port 层 1500ms 硬下限，保持原浅睡行为 */
     s_cfg.sleep_deep_s     = BRIDGE_IDLE_TO_SLEEP_S;        /* 30s：未连接空闲达此秒数进深睡 */
     s_cfg.usb_vid          = (uint16_t)BRIDGE_USB_VID;
@@ -228,18 +224,6 @@ int bridge_cfg_set_conn_interval(uint8_t units_1p25ms)
     return cfg_store();
 }
 
-int bridge_cfg_set_battery_src(uint8_t src)
-{
-    if (src > BRIDGE_BATT_SRC_EXTERNAL) {
-        return BRIDGE_ERR_PARAM;
-    }
-    if (s_cfg.battery_src == src) {
-        return BRIDGE_OK;
-    }
-    s_cfg.battery_src = src;
-    return cfg_store();
-}
-
 int bridge_cfg_set_sleep_policy(uint8_t policy)
 {
     if (policy > BRIDGE_SLEEP_POLICY_MANUAL) {
@@ -260,22 +244,6 @@ int bridge_cfg_set_sleep_times(uint16_t idle_s, uint16_t deep_s)
     }
     s_cfg.sleep_idle_s = idle_s;
     s_cfg.sleep_deep_s = deep_s;
-    return cfg_store();
-}
-
-int bridge_cfg_set_batt_report(uint8_t en, uint8_t on_change, uint8_t period_s)
-{
-    en        = (en != 0u) ? 1u : 0u;
-    on_change = (on_change != 0u) ? 1u : 0u;
-    /* period_s：0 = 关闭定时上报，其余 1..255 秒均合法 */
-    if (s_cfg.batt_report_en == en &&
-        s_cfg.batt_report_on_change == on_change &&
-        s_cfg.batt_report_period_s == period_s) {
-        return BRIDGE_OK;
-    }
-    s_cfg.batt_report_en        = en;
-    s_cfg.batt_report_on_change = on_change;
-    s_cfg.batt_report_period_s  = period_s;
     return cfg_store();
 }
 
@@ -374,12 +342,6 @@ int bridge_cfg_apply(uint8_t key, const uint8_t *value, uint8_t len)
                 return BRIDGE_ERR_PARAM;
             }
             return bridge_cfg_set_conn_interval(value[0]);
-
-        case BRIDGE_CFG_KEY_BATTERY_SRC:
-            if (len != 1u) {
-                return BRIDGE_ERR_PARAM;
-            }
-            return bridge_cfg_set_battery_src(value[0]);
 
         case BRIDGE_CFG_KEY_SLEEP_POLICY:
             if (len != 1u) {

@@ -41,7 +41,7 @@ core/            协议与状态机（纯逻辑，PC 可测）
   bridge_hid.c     ← HID 报表转发
   bridge_ota.c     ← 固件升级
   bridge_test.c    ← SRRC 射频测试
-port/<chip>/     芯片适配层（当前 port/ch58x/）
+port/<chip>/     芯片适配层（当前 port/ch58x/、port/fr2012a/）
   bridge_chip.h    ← app 层唯一入口（bridge_chip_boot / bridge_chip_poll）
   bridge_port_ch58x.c 等  ← bridge_port.h 实现 + radio/usb/ble 接入
   port.mk          ← 该芯片的构建描述（SDK 路径 / 源文件 / BOOT 镜像源）
@@ -59,7 +59,7 @@ web/             通用型 Web（debug 测试 / ota 升级，与芯片无关，�
 | 项 | 键盘侧（keyboard） | Dongle 侧（dongle） |
 | --- | --- | --- |
 | `BRIDGE_BOARD_IS_DONGLE` | 0 | 1 |
-| 默认模式 `bridge_mode_default()` | `MODE_BLE` (1) | `MODE_2G4` (3) |
+| 默认模式 `bridge_mode_default()` | `MODE_USB` (0)（射频关闭，等 SK32 命令） | `MODE_2G4` (3) |
 | 自动深睡 | 允许（AUTO 策略、空闲 ≥30s） | **禁止**（`#if !BRIDGE_BOARD_IS_DONGLE`） |
 | USB 供电检测 | 有 VBUS 逻辑 | 恒在线 |
 
@@ -257,15 +257,11 @@ web/             通用型 Web（debug 测试 / ota 升级，与芯片无关，�
 | `BRIDGE_SLEEP_POLICY_AUTO` | 0 | 自动策略（缺省，恒许可） |
 | `BRIDGE_SLEEP_POLICY_MANUAL` | 1 | 手动策略（看命令许可） |
 
-### 7.6 电池来源 `bridge_batt_src_t`
+### 7.6 电量来源
 
-| 名称 | 值 | 说明 |
-| --- | --- | --- |
-| `BRIDGE_BATT_SRC_AUTO` | 0 | 自动（缺省） |
-| `BRIDGE_BATT_SRC_LOCAL` | 1 | 本地 ADC |
-| `BRIDGE_BATT_SRC_EXTERNAL` | 2 | 外部上报（`SET_BATTERY` 优先） |
-
-> `EVT_BATTERY (0x82)` **仅在 `battery_src = LOCAL`（本地 ADC）** 时才会上报；`AUTO` / `EXTERNAL` 均不产生该事件。上报的开关与发送机制由 `BATTERY_CFG (0x26)` 配置。
+模组不再提供本地 ADC 采样，也不再向上回报 `EVT_BATTERY`：电量百分比与充电状态
+**只由 `SET_BATTERY (0x1C)` 命令输入**，模组仅缓存该值并用于 `EVT_STATE` 的 `battery%`
+字段与 BLE 电池服务（BAS）。
 
 ### 7.7 名称目标 `BRIDGE_NAME_TARGET_*`
 
@@ -294,7 +290,8 @@ NKRO 相关：`BRIDGE_NKRO_USAGE_BASE=4`、`BRIDGE_NKRO_MAX_KEYS=6`（降级 6KR
 | `0x18` TUNNEL_USB | `BRIDGE_TUNNEL_USB_LEN = 64` |
 | `0x19` TUNNEL_BLE | `BRIDGE_TUNNEL_BLE_LEN = 32` |
 
-> 市售模组指令映射（兼容参考）：`0x88/0x23→TUNNEL_USB`、`0x89/0x24→TUNNEL_BLE`、`0x87→SET_BATTERY`、`0x4A/4B/4C→SLEEP`、`0x4D→GET_ADC`、`0x8A/8B→NV_WRITE/READ`。
+> 市售模组指令映射（兼容参考）：`0x88/0x23→TUNNEL_USB`、`0x89/0x24→TUNNEL_BLE`、`0x87→SET_BATTERY`、`0x4A/4B/4C→SLEEP`、`0x8A/8B→NV_WRITE/READ`。
+> 原 `0x4D`（GET_ADC）与 `0x26`（电量上报配置）已随本地电池采样一并移除。
 
 ---
 
@@ -331,7 +328,6 @@ NKRO 相关：`BRIDGE_NKRO_USAGE_BASE=4`、`BRIDGE_NKRO_MAX_KEYS=6`（降级 6KR
 | `0x1B` | NV_READ | 控制 | ACK |
 | `0x1C` | SET_BATTERY | 控制 | ACK |
 | `0x1D` | SLEEP | 控制 | ACK |
-| `0x1E` | GET_ADC | 控制 | ACK |
 | `0x1F` | SET_NAME | 控制 | ACK |
 | `0x20` | SET_USB_ID | 控制 | ACK |
 | `0x21` | FW_BEGIN | 控制 | ACK |
@@ -339,7 +335,6 @@ NKRO 相关：`BRIDGE_NKRO_USAGE_BASE=4`、`BRIDGE_NKRO_MAX_KEYS=6`（降级 6KR
 | `0x23` | FW_END | 控制 | ACK |
 | `0x24` | FW_ABORT | 控制 | ACK |
 | `0x25` | SLEEP_CFG | 控制 | ACK |
-| `0x26` | BATTERY_CFG | 控制 | ACK |
 | `0x2A` | GET_DIAG | 控制 | ACK |
 | `0x7F` | PING | 控制 | ACK 或 EVT_PONG |
 
@@ -351,7 +346,6 @@ NKRO 相关：`BRIDGE_NKRO_USAGE_BASE=4`、`BRIDGE_NKRO_MAX_KEYS=6`（降级 6KR
 | --- | --- | --- |
 | `0x80` | EVT_STATE | 模式/连接/配置变化 |
 | `0x81` | EVT_LEDS | 主机 LED 状态 |
-| `0x82` | EVT_BATTERY | 电量/电压/充电状态上报（仅 `battery_src=LOCAL`，按 `BATTERY_CFG` 门控） |
 | `0x83` | EVT_PAIR_RESULT | 配对结果 |
 | `0x84` | EVT_ERROR | 各类错误 |
 | `0x85` | EVT_TUNNEL_USB | USB 透传上行 |
@@ -886,10 +880,10 @@ Shift+A : AA 55 08 10 17 00 02 00 04 00 00 00 00 00 07 CB
 
 ---
 
-### 9.26 `0x1C` SET_BATTERY — 外部电量上报
+### 9.26 `0x1C` SET_BATTERY — 电量与充电状态下发
 
-- **功能**：由外部（如键盘主控）上报电量百分比与充电状态。
-- **现象/时序**：`bridge_power_set_external(percent, charging)`；仅当 `battery_src=EXTERNAL/AUTO` 时优先于本地 ADC（`charging` 随之取代本地 `CHRG_STAT` 作为充电状态来源）；先回 ACK，再下发 `EVT_STATE`。低电告警：`LOW`（≤20%）、`CRIT`（≤5%）。
+- **功能**：由外部（键盘主控 SK32）下发电量百分比与充电状态；模组不做本地采样，本命令是**唯一电量来源**。
+- **现象/时序**：`bridge_power_set_external(percent, charging)` 缓存该值（>100 截断为 100）；先回 ACK，再下发 `EVT_STATE`（`battery%` 即该值）。模组不再产生 `EVT_BATTERY`。
 - **请求 payload（1~2B）**：`[percent u8][flags u8]` 取值明细：
 
 | 偏移 | 字段 | 取值含义 |
@@ -938,15 +932,10 @@ WAKE : AA 55 01 1D 25 00 00 4A F4
 
 ---
 
-### 9.28 `0x1E` GET_ADC — 读取电池电压
+### 9.28 `0x1E` GET_ADC — （已移除）
 
-- **功能**：读取电池 ADC 电压（毫伏）。
-- **应答 payload（2B）**：`[mv_lo][mv_hi]`（LE，单位 mV）。
-
-```
-请求      : AA 55 00 1E 26 00 E2 70
-应答 3900mV: AA 55 02 1E 26 02 3C 0F 02 81   (0x0F3C = 3900)
-```
+模组不再接电池 ADC（PA14 已释放），本命令不再实现；主机下发将收到
+`FLAG_ERR` + `ECODE_PARAM (0x06)`。电量请使用 `SET_BATTERY (0x1C)` 下发。
 
 ---
 
@@ -1155,23 +1144,10 @@ AA 55 04 80 00 01 01 01 01 42 C8 25
 AA 55 01 81 00 01 03 83 13   (leds=0x03 → Num+Caps)
 ```
 
-### 10.3 `0x82` EVT_BATTERY — 电量上报
+### 10.3 `0x82` EVT_BATTERY — （已移除）
 
-- **触发**：**仅当 `battery_src = LOCAL`（本地 ADC）** 且 `BATTERY_CFG (0x26)` 总开关为开时才上报；`AUTO` / `EXTERNAL` 源不产生该事件。
-- **门控**：`on_change=1` 时电量百分比**或充电状态**变化即上报（并刷新定时基准）；`period_s≠0` 时距上次上报达该秒数定时上报（`period_s=0` 关闭定时）。
-- **payload（4B）**：
-
-| 偏移 | 字段 | 取值含义 |
-| --- | --- | --- |
-| 0 | `mv_lo` | 电压低字节（mV，LE16 低位） |
-| 1 | `mv_hi` | 电压高字节（mV，LE16 高位） |
-| 2 | `percent` | 电量百分比 0..100 |
-| 3 | `flags` | 电量标志位：bit0 `CHARGING`（`1`=充电中/`0`=未充电），bit1~7 保留置 0 |
-
-```
-AA 55 04 82 00 01 3C 0F 42 00 5C 7B   (3900mV / 66% / 未充电)
-AA 55 04 82 00 01 3C 0F 42 01 7D 6B   (3900mV / 66% / 充电中)
-```
+模组不再做本地电池采样，也不再产生该事件。电量与充电状态只经 `SET_BATTERY (0x1C)`
+下发，结果体现在 `EVT_STATE` 的 `battery%` 字段。主机收到 0x82 时应忽略。
 
 ### 10.4 `0x83` EVT_PAIR_RESULT — 配对结果
 
@@ -1270,7 +1246,6 @@ AA 55 00 7F 2F 02 63 46
 | `0x02` | LOG_LEVEL | 1 | 日志等级；`> DEBUG` → `PARAM`；`BRIDGE_LOG_ENABLE=0` 时恒 `UNSUPPORTED` | `BRIDGE_LOG_LEVEL` |
 | `0x03` | ADV_NAME_MAC | 1 | 广播名是否附 MAC：0/1 | 1 |
 | `0x04` | CONN_INTERVAL | 1 | 连接间隔（直接存，值 6 ≈ 7.5ms） | 6 |
-| `0x05` | BATTERY_SRC | 1 | 0=AUTO / 1=LOCAL / 2=EXTERNAL | 0 (AUTO) |
 | `0x06` | SLEEP_POLICY | 1 | 0=AUTO / 1=MANUAL | 0 (AUTO) |
 
 其他关键 `bridge_cfg_t` 字段（由专用命令或默认写入）：
@@ -1279,7 +1254,6 @@ AA 55 00 7F 2F 02 63 46
 | --- | --- | --- |
 | `last_mode` | `bridge_mode_default()` | SET_MODE |
 | `ble_profile` | 1 | SET_PROFILE |
-| `batt_report_en / batt_report_on_change / batt_report_period_s` | `1 / 1 / 10` | BATTERY_CFG |
 | `sleep_idle_s / sleep_deep_s` | `1 / 30` | SLEEP_CFG |
 | `usb_vid / usb_pid` | `0x0194 / 0x0463` | SET_USB_ID |
 | BLE 名 / USB 名 | `"SK32 Keyboard"` / `"SK32 Wireless"` | SET_NAME |

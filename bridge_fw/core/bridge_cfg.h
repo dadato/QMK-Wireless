@@ -9,14 +9,13 @@
 #include "bridge_types.h"
 
 #define BRIDGE_CFG_MAGIC     0x334Du   /* "3M" */
-#define BRIDGE_CFG_VERSION   5u
+#define BRIDGE_CFG_VERSION   6u
 
 /* SET_CONFIG（0x09）的 key */
 #define BRIDGE_CFG_KEY_REPORT_PERIOD  0x01u   /* value: u16 LE, ms */
 #define BRIDGE_CFG_KEY_LOG_LEVEL      0x02u   /* value: u8 */
 #define BRIDGE_CFG_KEY_ADV_NAME_MAC   0x03u   /* value: u8, 1=广播名带 MAC 后缀 */
 #define BRIDGE_CFG_KEY_CONN_INTERVAL  0x04u   /* value: u8, 单位 1.25ms */
-#define BRIDGE_CFG_KEY_BATTERY_SRC    0x05u   /* value: u8, 见 BRIDGE_BATT_SRC_* */
 #define BRIDGE_CFG_KEY_SLEEP_POLICY   0x06u   /* value: u8, 见 BRIDGE_SLEEP_POLICY_* */
 
 /* 名称与配置分开存放（各自一个 NV 槽），此处只记录长度与 USB 标识 */
@@ -29,11 +28,7 @@ typedef struct {
     uint16_t rf24_report_ms;    /* 默认 BRIDGE_RF24_REPORT_HZ → 1ms */
     uint8_t  adv_name_with_mac;
     uint8_t  conn_interval;
-    uint8_t  battery_src;       /* BRIDGE_BATT_SRC_* */
     uint8_t  sleep_policy;      /* BRIDGE_SLEEP_POLICY_* */
-    uint8_t  batt_report_en;    /* EVT_BATTERY 总开关，0=关 / 1=开（仅 LOCAL 电量源生效） */
-    uint8_t  batt_report_on_change; /* 电量变化时立即上报，0=关 / 1=开 */
-    uint8_t  batt_report_period_s;  /* 定时上报周期，单位 s，0=关闭定时上报 */
     uint16_t sleep_idle_s;      /* AUTO 策略：浅睡(IDLE)门限，单位 s，0=禁用自动浅睡 */
     uint16_t sleep_deep_s;      /* AUTO 策略：深睡(DEEP)门限，单位 s，0=禁用自动深睡 */
     uint8_t  ble_name_len;      /* 有效长度 0..BRIDGE_NAME_MAX，0 = 用默认名 */
@@ -54,14 +49,9 @@ int  bridge_cfg_set_log_level(uint8_t level);
 int  bridge_cfg_set_rf24_report_ms(uint16_t ms);
 int  bridge_cfg_set_adv_name_mac(uint8_t en);
 int  bridge_cfg_set_conn_interval(uint8_t units_1p25ms);
-int  bridge_cfg_set_battery_src(uint8_t src);
 int  bridge_cfg_set_sleep_policy(uint8_t policy);
 /* AUTO 自动休眠策略下的时间门限（单位 s，0 = 禁用该项自动休眠），见 CMD_SLEEP_CFG */
 int  bridge_cfg_set_sleep_times(uint16_t idle_s, uint16_t deep_s);
-
-/* 电量上报配置（EVT_BATTERY 开关与发送机制），见 CMD_BATTERY_CFG：
- *   en       ：总开关（0/1）；on_change：电量变化即报（0/1）；period_s：定时周期 s（0=关闭定时） */
-int  bridge_cfg_set_batt_report(uint8_t en, uint8_t on_change, uint8_t period_s);
 
 /* 可改写名称（target = BRIDGE_NAME_TARGET_*）；名称以字节计，不带 '\0' */
 int  bridge_cfg_set_name(uint8_t target, const uint8_t *name, uint8_t len);

@@ -17,7 +17,7 @@
 经 **PC COM 口（USB-TTL 直连模组 UART1，921600 8N1）** 与**键盘侧 CH582 模组**通讯，
 用于开发阶段的**功能测试与调试**：
 
-- **发指令**：全命令表可视化操作（版本/状态/MAC/ADC、模式、配对、配置、NV、睡眠、透传、复位等）；
+- **发指令**：全命令表可视化操作（版本/状态/MAC、模式、配对、配置、NV、睡眠、电量下发、透传、复位等）；
 - **模拟键盘数据流**：构造并注入 HID 报文（键盘 6KRO / NKRO / 多媒体 / 鼠标 / 系统键），
   支持文本打字、宏/序列、压力与速率测试；
 - **监视与诊断**：实时帧监视器、事件解码、链路健康度、统计计数、日志导出；
@@ -45,7 +45,7 @@
 | 桥帧 | UART1 上的 `AA 55 ...` 协议帧 |
 | HID 转发 | `0x10~0x15` 命令：把 HID 报文经射频（BLE/2.4G）送出，无 ACK |
 | 快速路径 | 无应答命令（HID 0x10~0x15、TUNNEL 0x18/0x19、RESET） |
-| 控制路径 | 有 ACK/ERR 应答的命令（GET_*/SET_*/PAIR/NV/SLEEP/ADC/NAME/USB_ID/PING/FW_*/ENTER_BOOT） |
+| 控制路径 | 有 ACK/ERR 应答的命令（GET_*/SET_*/PAIR/NV/SLEEP/NAME/USB_ID/PING/FW_*/ENTER_BOOT） |
 | DUP 抑制 | 固件对与上次相同的 HID 报文返回 `BRIDGE_ERR_DUP` 并抑制发送（快速路径无 ACK，故**上位机不可直接观测**，仅体现为「射频侧无输出」） |
 | VIA 隧道 / 裸透传 | 网页经 WebHID（Dongle / 模组 BLE 两条通路）与真实 SK32 之间的 **32B 裸载荷**透传通道（HID 报文体无 report ID、无 status 字节），对应固件 `TUNNEL_USB(0x18)`/`EVT_TUNNEL_USB(0x85)` 与 `TUNNEL_BLE(0x19)`/`EVT_TUNNEL_BLE(0x86)`（§5.8） |
 
@@ -145,11 +145,9 @@ CH582F 模组 UART1 (PA8=RXD1 / PA9=TXD1)
 | `GET_BLE_SLOTS` | `0x0F` | — | `[s1 u8][s2 u8][s3 u8][s4 u8][last_active u8]` | BLE 多主机槽绑定状态：`s1..s4`=槽 1..4 是否已绑定（0=空/1=已绑定）；`last_active`=最近活跃槽 1..4，0=无。仅键盘模组支持，Dongle 侧 → `ERR(STATE)` |
 | `NV_WRITE` | `0x1A` | `[addr u8][data 32B]` | — | 写用户 NV 单元 |
 | `NV_READ` | `0x1B` | `[addr u8]` | `[addr u8][data 32B]` | 读用户 NV 单元 |
-| `SET_BATTERY` | `0x1C` | `[percent u8][flags u8]` | —（随后 `EVT_STATE`） | 注入电量与充电状态；`flags` bit0=充电中（1=充电/0=未充电），其余位保留 0；`flags` 可省略（旧版单字节仍接受，按未充电处理） |
+| `SET_BATTERY` | `0x1C` | `[percent u8][flags u8]` | —（随后 `EVT_STATE`） | **唯一电量来源**：下发模组电量与充电状态；`flags` bit0=充电中（1=充电/0=未充电），其余位保留 0；`flags` 可省略（旧版单字节仍接受，按未充电处理） |
 | `SLEEP` | `0x1D` | `[level u8]` | — | `0`=唤醒 / `1`=浅睡 / `2`=深睡 |
 | `SLEEP_CFG` | `0x25` | `[idle_s u16 LE][deep_s u16 LE]` | — | 配置 AUTO 策略自动休眠门限（单位 s，落盘）：`idle_s`=距最近串口接收活动达该秒数后允许浅睡（0=禁用自动浅睡）；`deep_s`=未连接且空闲达该秒数后进深睡（0=禁用自动深睡）；`len≠4` → `ERR(PARAM)` |
-| `BATTERY_CFG` | `0x26` | `[enable u8][on_change u8][period_s u8]` | — | 配置 `EVT_BATTERY` 的开关与发送机制（落盘）：`enable`=总开关（0=关/1=开）；`on_change`=电量变化时立即上报（0=关/1=开）；`period_s`=定时上报周期（单位 S，0=关闭定时）；`len≠3` → `ERR(PARAM)`；**`EVT_BATTERY` 仅在 `battery_src=LOCAL`（本地 ADC）时才会上报** |
-| `GET_ADC` | `0x1E` | — | `[mv u16 LE]` | 采集电压 |
 | `SET_NAME` | `0x1F` | `[target u8][name...]` | — | 改名（`target` 0=BLE 广播名 / 1=Dongle USB 名，经 2.4G 转发） |
 | `SET_USB_ID` | `0x20` | `[vid u16 LE][pid u16 LE]` | — | 改写 USB 标识（Dongle 侧重枚举） |
 | `GET_DIAG` | `0x2A` | — | `[0]up [1]conn [2]bound [3]tx_busy [4]tx_q_cnt [5]hb_miss [6..7]report_period [8..9]tx_submit_ok [10..11]tx_submit_fail [12..13]tx_done_ok [14..15]tx_done_fail [16..17]tx_drop [18..19]rx_any [20..21]rx_pair [22..23]rx_data_bad`（`[6..23]` 均 LE16） | 2.4G 射频诊断快照（24B，排障用） |
@@ -183,7 +181,6 @@ CH582F 模组 UART1 (PA8=RXD1 / PA9=TXD1)
 | `0x02` | `LOG_LEVEL` | `u8` 0..4 | 日志级别 |
 | `0x03` | `ADV_NAME_MAC` | `u8` 0/1 | 广播名是否带 MAC 后缀 |
 | `0x04` | `CONN_INTERVAL` | `u8`（×1.25ms） | BLE 连接间隔 |
-| `0x05` | `BATTERY_SRC` | `u8` 0=auto/1=local/2=external | 电量来源 |
 | `0x06` | `SLEEP_POLICY` | `u8` 0=AUTO/1=MANUAL | 休眠策略（AUTO=自动判闲休眠 / MANUAL=仅 `SLEEP` 指令） |
 
 来源：[bridge_cfg.h](file:///c:/Users/Administrator/Desktop/qmk/qmk_firmware/wireless/bridge_fw/core/bridge_cfg.h#L14-L20)。
@@ -194,7 +191,6 @@ CH582F 模组 UART1 (PA8=RXD1 / PA9=TXD1)
 | --- | --- | --- | --- |
 | `EVT_STATE` | `0x80` | `[mode u8][connected u8][profile u8][battery u8]` | 状态变更 |
 | `EVT_LEDS` | `0x81` | `[led_state u8]` | 主机 LED（Num/Caps/Scroll） |
-| `EVT_BATTERY` | `0x82` | `[mv u16 LE][percent u8][flags u8]` | 电量上报（仅 `battery_src=LOCAL` 时按 `BATTERY_CFG` 开关/变化/定时下发）；`flags` bit0=充电中（1=充电/0=未充电），其余位保留 0；充电状态变化也会触发上报 |
 | `EVT_PAIR_RESULT` | `0x83` | `[result u8][profile u8]` | 配对结果（`result` 0=成功 / 1=失败或配对窗口超时） |
 | `EVT_ERROR` | `0x84` | `[code u8]` | 错误码（见 4.10） |
 | `EVT_TUNNEL_USB` | `0x85` | ≤64B | USB 透传上报 |
@@ -247,10 +243,10 @@ GET_STATUS  请求：AA 55 00 02 05 00                      CRC16
 
 ### 5.3 Tab｜状态（仪表盘）
 
-- 版本、MAC、ADC(mV)、模式、连接态、BLE 槽位、电量、LED 状态。
+- 版本、MAC、模式、连接态、BLE 槽位、电量、LED 状态。
 - 统计计数：TX / RX / CRC 错误 / 超时 / ERR / 事件 / PONG（心跳应答）。
   > 不设 DUP 计数：HID 去重发生在快速路径（无 ACK/ERR），上位机无法观测。
-- 「刷新」按钮 + 事件驱动自动更新（`EVT_STATE`/`EVT_BATTERY`/`EVT_LEDS`）。
+- 「刷新」按钮 + 事件驱动自动更新（`EVT_STATE`/`EVT_LEDS`）。
 
 ### 5.4 Tab｜监视器
 
@@ -261,9 +257,9 @@ GET_STATUS  请求：AA 55 00 02 05 00                      CRC16
 ### 5.5 Tab｜命令台
 
 - 按组呈现全命令表（§4.6 / §4.7）的可视化表单：
-  - **基础**：GET_VERSION / GET_STATUS / GET_MODE / GET_WIRELESS_STATE / GET_BLE_SLOTS / GET_MAC / GET_ADC / GET_DIAG / HID_DIAG / PING
+  - **基础**：GET_VERSION / GET_STATUS / GET_MODE / GET_WIRELESS_STATE / GET_BLE_SLOTS / GET_MAC / GET_DIAG / HID_DIAG / PING
   - **模式与配对**：SET_MODE(下拉，不含配对窗口) / SET_PROFILE / PAIR_START / UNPAIR
-  - **配置**：SET_CONFIG 六个键（含便捷项 REPORT_PERIOD / LOG_LEVEL / ADV_NAME_MAC / CONN_INTERVAL / BATTERY_SRC / SLEEP_POLICY）+ SET_HEARTBEAT
+  - **配置**：SET_CONFIG 五个键（含便捷项 REPORT_PERIOD / LOG_LEVEL / ADV_NAME_MAC / CONN_INTERVAL / SLEEP_POLICY）+ SET_HEARTBEAT
   - **电源与其他**：SET_BATTERY / SLEEP / NV_READ / NV_WRITE(hex) / SET_NAME / SET_USB_ID / SET_TEST_MODE
   - **透传**：TUNNEL_USB(hex) / TUNNEL_BLE(hex)
   - **HID 直发**：见 §5.6
@@ -299,9 +295,9 @@ GET_STATUS  请求：AA 55 00 02 05 00                      CRC16
 
 | 场景 | 覆盖 |
 | --- | --- |
-| `smoke` | 版本/状态/MAC/ADC/PING + HID 五类 + 透传 + 越界参数 → ERR(PARAM) |
+| `smoke` | 版本/状态/MAC/PING + HID 五类 + 透传 + 越界参数 → ERR(PARAM) |
 | `nv` | 32B 单元写-读回（0/1/30/61）+ 越界 ERR(PARAM) |
-| `config` | SET_CONFIG 五项（跑完恢复默认）+ 未知键 ERR(PARAM) |
+| `config` | SET_CONFIG 配置键（跑完恢复默认）+ 未知键 ERR(PARAM) |
 | `battery` | SET_BATTERY(66, 充电中) → EVT_STATE + GET_STATUS 一致 |
 | `sleep` | IDLE/DEEP/WAKE 分级行为 |
 | `pair_2g4` | UNPAIR→SET_MODE(2G4)→PAIR_START→EVT_PAIR_RESULT→EVT_STATE（需 Dongle） |
@@ -412,7 +408,7 @@ GET_STATUS  请求：AA 55 00 02 05 00                      CRC16
 | --- | --- | --- |
 | 单元自检 | `crc16` 对照 `proto.py`；帧编解码往返；解析器容错（AA AA 55 / LEN>64 / CRC 错重同步） | 逐字节一致 |
 | 离线回环 | 内置虚拟链路（可选，供无硬件自检）跑 `smoke/nv/config/battery` | 全 PASS |
-| 真机-基础 | USB-TTL 直连模组 UART1 → `info` 等价操作 | 版本/状态/MAC/ADC 正确 |
+| 真机-基础 | USB-TTL 直连模组 UART1 → `info` 等价操作 | 版本/状态/MAC 正确 |
 | 真机-监视 | 触发事件/心跳，监视器完整呈现且 CRC 错为 0 | 无丢帧、无未处理帧 |
 | 真机-HID | 2.4G 已配对 / BLE 已配对下打字与各 HID 类 | PC/手机端出现对应输入 |
 | 真机-场景 | §5.7 非破坏性集合 | 全 PASS，无残留副作用 |

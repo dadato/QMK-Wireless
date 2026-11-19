@@ -50,7 +50,7 @@ static void app_apply_ident(void)
 }
 
 /* 上电顺序：日志 → GPIO → 配置 → 串口 → HID → 电量 → 模式 → 协议
- *  - GPIO 必须先于 mode_init，因为 mode_init 要读 MODE_SEL / VBUS
+ *  - GPIO 必须先于 mode_init（未用引脚先归位，避免切射频期间悬空）
  *  - 串口必须先于 mode_init，因为切模式会立即发 EVT_STATE */
 void bridge_app_init(void)
 {
@@ -143,7 +143,6 @@ void bridge_app_poll(void)
 
     bridge_proto_poll();
     bridge_mode_poll();
-    bridge_power_poll();
 }
 
 void bridge_app_on_uart_rx(void)

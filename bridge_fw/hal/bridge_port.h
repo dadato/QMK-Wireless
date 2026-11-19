@@ -98,14 +98,14 @@ void     port_log_write(const char *s, uint16_t len);
 
 /* ---------------- GPIO ---------------- */
 void     port_gpio_init(void);
-uint8_t  port_gpio_read_mode_sel(void);     /* 0..3 */
 void     port_gpio_set_wake(bool active);
+/* 链路指示：仅 Dongle 的 LED_STAT 有效；键盘侧无该信号（空实现）。 */
 void     port_gpio_set_link(bool connected);
 
-/* ---------------- 电源 / 检测 ---------------- */
-uint16_t port_bat_read_mv(void);
+/* ---------------- 电源 / 检测 ----------------
+ * 本板不接电池 ADC 与充电检测线：电量百分比与充电状态只由
+ * CMD_SET_BATTERY(0x1C) 命令输入（见 core/bridge_power.c）。 */
 bool     port_vbus_present(void);
-bool     port_charger_active(void);
 
 /* ---------------- 系统控制 ---------------- */
 void     port_enter_bootloader(void);

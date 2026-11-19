@@ -1,0 +1,3 @@
+[submodule "bridge_fw/port/ch58x/sdk/ch583"]
+	path = bridge_fw/port/ch58x/sdk/ch583
+	url = https://github.com/openwch/ch583

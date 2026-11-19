@@ -40,7 +40,6 @@
   var EVT = {
     STATE: 0x80,
     LEDS: 0x81,
-    BATTERY: 0x82,
     PAIR_RESULT: 0x83,
     ERROR: 0x84,
     PONG: 0x7F
@@ -50,7 +49,7 @@
     0x01: 'GET_VERSION', 0x02: 'GET_STATUS', 0x08: 'ENTER_BOOT',
     0x21: 'FW_BEGIN', 0x22: 'FW_DATA',
     0x23: 'FW_END', 0x24: 'FW_ABORT', 0x7F: 'PING',
-    0x80: 'EVT_STATE', 0x81: 'EVT_LEDS', 0x82: 'EVT_BATTERY', 0x83: 'EVT_PAIR_RESULT',
+    0x80: 'EVT_STATE', 0x81: 'EVT_LEDS', 0x83: 'EVT_PAIR_RESULT',
     0x84: 'EVT_ERROR', 0x85: 'EVT_TUNNEL_USB', 0x86: 'EVT_TUNNEL_BLE'
   };
 

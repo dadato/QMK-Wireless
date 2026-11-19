@@ -33,7 +33,7 @@ typedef struct wb_state_s {
     uint8_t  led;       /* last EVT_LEDS keyboard-LED bitmap */
     uint16_t batt_mv;   /* last battery voltage reading (0 = unknown) */
     uint8_t  batt_pct;  /* last battery percentage */
-    bool     charging;  /* battery is charging (EVT_BATTERY flags bit0) */
+    bool     charging;  /* battery is charging (reported to module via SET_BATTERY flags) */
 } wb_state_t;
 
 /* Board wiring + fixed parameters.  Zeroed / PAL_NOLINE fields fall back to

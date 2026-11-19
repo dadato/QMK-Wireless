@@ -1,4 +1,4 @@
-# CH582F 管脚分配与设计决策（v1.3）
+# CH582F 管脚分配与设计决策（v1.4）
 
 > 配套文档：[bridge_fw_spec.md](./bridge_fw_spec.md) · [bridge_impl_checklist.md](./bridge_impl_checklist.md)
 >
@@ -69,17 +69,16 @@ QFN28 上可用的串口逐一排除：
 |---|---|---|---|---|---|
 | 串口接收 | BR_RX | PA8 / RXD1 | UART1 | **6** | 输入（来自 SK32 TX） |
 | 串口发送 | BR_TX | PA9 / TXD1 | UART1 | **7** | 输出（送往 SK32 RX） |
-| 模式选择 bit0 | MODE_SEL0 | PB12 | GPIO | **11** | 输入 |
-| 模式选择 bit1 | MODE_SEL1 | PB13 | GPIO | **10** | 输入 |
 | 唤醒请求 | WAKE | PA5 | GPIO | **24** | 输出，高有效 |
-| 连接指示 | LINK | PA13 | GPIO | **27** | 输出（可选） |
 | 硬复位 | nRESET | PB23 | **RST#** | **16** | 输入，低有效，内置上拉 |
-| 电池采样 | BAT_ADC | PA14 / AIN4 | ADC ch4 | **26** | 模拟输入 |
-| 充电状态 | CHRG_STAT | PA15 | GPIO | **25** | 输入 |
 | 调试时钟 | TCK | PB15 | 两线仿真 | **8** | — |
 | 调试数据 | TIO | PB14 | 两线仿真 | **9** | — |
 | 量产 ISP 配置 | ISP_CFG | PB22 | GPIO | **17** | 输入，**10k 上拉** |
-| 调试串口（printf 日志） | DBG_TX / DBG_RX | PB7 / PB4 | UART0 | **14 / 15** | 日志输出（D13），量产固件可关闭日志但**建议保留焊盘** |
+| 调试串口（printf 日志，仅 TX） | DBG_TX | PB7 | UART0 | **14** | 日志输出（D13），量产固件可关闭日志但**建议保留焊盘** |
+
+> **v1.4 已裁剪**：`MODE_SEL0/1`（PB12/PB13）、`LINK`（PA13）、`BAT_ADC`（PA14）、
+> `CHRG_STAT`（PA15）、`DBG_RX`（PB4）全部取消。工作模式上电缺省 USB，由 SK32 经
+> `SET_MODE` 命令下发；电量与充电状态一律由 `SET_BATTERY(0x1C)` 命令输入，模组不做本地采样。
 
 ### 3.2 专用引脚（非 GPIO）
 
@@ -108,10 +107,10 @@ QFN28 上可用的串口逐一排除：
 
 | 类别 | 数量 |
 |---|---|
-| 已分配 GPIO | 11（BR_RX/TX、MODE_SEL0/1、WAKE、LINK、nRESET、BAT_ADC、CHRG_STAT、TCK、TIO） |
-| 保留（ISP / 调试串口） | 3（ISP_CFG、DBG_TX、DBG_RX） |
+| 已分配 GPIO | 7（BR_RX/TX、WAKE、nRESET、TCK、TIO、DBG_TX） |
+| 保留（ISP） | 1（ISP_CFG） |
 | 专用（非 GPIO，已实装） | 2（PA10/PA11，32.768kHz LSE 晶振，D15） |
-| 空闲备用 | **3**（PB10、PB11、PA12） |
+| 空闲（统一推挽输出低） | **9**（PA12、PA13、PA14、PA15、PB4、PB10、PB11、PB12、PB13；PA10/PA11 归 LSE） |
 
 ---
 
@@ -124,6 +123,7 @@ QFN28 上可用的串口逐一排除：
 | 状态指示 | LED_STAT | PA4 | GPIO | **23** | 配对/连接指示 |
 | 配对按键（可选） | PAIR_KEY | PA5 | GPIO | **24** | 长按重新配对 |
 | 调试 | TCK / TIO | PB15 / PB14 | 两线仿真 | **8 / 9** | 预留测试点 |
+| 调试串口 | DBG_TX | PB7 | UART0 | **14** | printf 日志（仅 TX） |
 | 量产 ISP 配置 | ISP_CFG | PB22 | GPIO | **17** | 10k 上拉 |
 | 32MHz 晶振 | X32MO / X32MI | — | — | **18 / 19** | ±10 ppm |
 | 天线 | ANT | — | — | **21** | 50Ω |
@@ -131,7 +131,8 @@ QFN28 上可用的串口逐一排除：
 | 模拟电源 | VINTA / VDCIA | — | — | **20 / 22** | 同 3.3 |
 | 地 | GND / EPAD | — | — | **0** | — |
 
-Dongle 侧 GPIO 占用极少，剩余 12 个引脚空闲（PA10/PA11 已被 32.768kHz LSE 占用，见 D15）。
+Dongle 侧 GPIO 占用极少，未使用引脚（含 PB4/PA13/PA14/PA15/PB12/PB13）统一配置为推挽输出低
+（PA10/PA11 已被 32.768kHz LSE 占用，见 D15）。
 
 ---
 
@@ -179,8 +180,9 @@ Dongle 侧同理，需能进入定频模式（键盘与 Dongle 组成一套系�
 ## 6. 未使用引脚处理
 
 - 未使用 GPIO 一律配置为**推挽输出低**（由 `port_gpio_init()` 统一处理），避免悬空输入漏电、受干扰影响待机电流
-- **键盘侧**未使用清单：PA12、PB10、PB11（键盘侧不走 USB，USB1 差分对闲置）
-- **Dongle 侧**未使用清单：PA8、PA9（无 UART1 数据面）、PA12、PA13、PA14、PA15（无拨码/电池/控制信号）、PB12、PB13（USB2 闲置）
+- **键盘侧**未使用清单：PA12、PA13、PA14、PA15、PB4、PB10、PB11、PB12、PB13
+  （其中 PB12/PB13 为原 MODE_SEL、PA13 原 LINK、PA14 原 BAT_ADC、PA15 原 CHRG_STAT、PB4 原 UART0 RX）
+- **Dongle 侧**未使用清单：PA8、PA9（无 UART1 数据面）、PA12、PA13、PA14、PA15、PB4、PB12、PB13
 - `ISP_CFG`（PB22）必须 **10k 上拉**，确保上电不误入 BootLoader；量产治具/恢复模式下拉至低
 - TCK/TIO（PB14/PB15）为两线仿真（SDI 的 TIO/TCK）调试口，**严禁改写为输出**，保持默认
 - PB23 为 `RST#`（外部复位输入），非 GPIO，**不得驱动**
@@ -210,14 +212,13 @@ SK32F077 的 ChibiOS 串口 LLD 只实现了 **USART1 / USART2**（见 `hal_seri
 |---|---|---|---|---|
 | BR_TX | **PA9 / USART1_TX** | PA8 / RXD1（pin 6） | SK32 → 桥 | 3.3V |
 | BR_RX | **PA10 / USART1_RX** | PA9 / TXD1（pin 7） | 桥 → SK32 | 3.3V |
-| MODE_SEL0 | SK32 GPIO（建议 PB3） | PB12（pin 11） | SK32 → 桥 | 3.3V |
-| MODE_SEL1 | SK32 GPIO（建议 PB4） | PB13（pin 10） | SK32 → 桥 | 3.3V |
 | WAKE | SK32 EXTI 输入（建议 PB6） | PA5（pin 24） | 桥 → SK32 | 3.3V，高有效 |
-| LINK | SK32 GPIO（可选，建议 PB7） | PA13（pin 27） | 桥 → SK32 | 3.3V |
 | nRESET | SK32 GPIO（建议 PB8） | PB23（pin 16） | SK32 → 桥 | 3.3V，低有效 |
 | VBUS_DET | SK32 检测 | — | — | 桥不参与 |
 
-> 说明：MODE_SEL0/1、WAKE、LINK、nRESET 用的是 PA9/PA10 之外的**空闲 GPIO 建议值**（PB3/PB4/PB6~PB8），投板前须按最终矩阵/扩展器件再复核；它们只需普通 GPIO/EXTI 能力，可灵活挪动。
+> 说明：工作模式不再使用硬件 `MODE_SEL`，桥侧上电缺省 USB，由 SK32 经 UART `SET_MODE` 命令下发；
+> 电量/充电状态经 `SET_BATTERY` 命令下发。WAKE/nRESET 用的是 PA9/PA10 之外的**空闲 GPIO 建议值**，
+> 投板前须按最终矩阵/扩展器件再复核。
 > 若 SK32 侧另需 SWD 调试，注意 PA13/PA14 不要改作他用（现有两块板即如此）。
 
 ### 7.3 SK32 侧固件改动（QMK）

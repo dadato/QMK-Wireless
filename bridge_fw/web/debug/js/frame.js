@@ -58,7 +58,6 @@
     NV_READ: 0x1B,
     SET_BATTERY: 0x1C, /* 下发电量：payload [pct u8][flags u8]（bit0 = 充电中） */
     SLEEP: 0x1D,
-    GET_ADC: 0x1E,
     SET_NAME: 0x1F,
     SET_USB_ID: 0x20,
 
@@ -67,7 +66,6 @@
     FW_END: 0x23,
     FW_ABORT: 0x24,
     SLEEP_CFG: 0x25,  /* SLEEP 时间配置：payload [idle_s LE16][deep_s LE16]，单位 s */
-    BATTERY_CFG: 0x26, /* 电量上报配置：payload [enable][on_change][period_s]，各 1B（仅 LOCAL 源有 EVT_BATTERY） */
 
     GET_DIAG: 0x2A,   /* 2.4G 诊断快照（排障用，不在市售模组指令集内；应答 24B） */
     HID_DIAG: 0x2B,   /* BLE HID 服务注册取证（排障用；应答 26B） */
@@ -81,7 +79,6 @@
   var EVT = {
     STATE: 0x80,
     LEDS: 0x81,
-    BATTERY: 0x82,
     PAIR_RESULT: 0x83,
     ERROR: 0x84,
     TUNNEL_USB: 0x85,
@@ -103,13 +100,13 @@
     0x10: 'HID_KEYBOARD', 0x11: 'HID_NKRO', 0x12: 'HID_CONSUMER', 0x13: 'HID_MOUSE',
     0x14: 'HID_SYSTEM', 0x15: 'HID_RELEASE',
     0x18: 'TUNNEL_USB', 0x19: 'TUNNEL_BLE', 0x1A: 'NV_WRITE', 0x1B: 'NV_READ',
-    0x1C: 'SET_BATTERY', 0x1D: 'SLEEP', 0x1E: 'GET_ADC', 0x1F: 'SET_NAME',
+    0x1C: 'SET_BATTERY', 0x1D: 'SLEEP', 0x1F: 'SET_NAME',
     0x20: 'SET_USB_ID', 0x21: 'FW_BEGIN', 0x22: 'FW_DATA', 0x23: 'FW_END',
-    0x24: 'FW_ABORT', 0x25: 'SLEEP_CFG', 0x26: 'BATTERY_CFG', 0x2A: 'GET_DIAG', 0x2B: 'HID_DIAG', 0x7F: 'PING'
+    0x24: 'FW_ABORT', 0x25: 'SLEEP_CFG', 0x2A: 'GET_DIAG', 0x2B: 'HID_DIAG', 0x7F: 'PING'
   };
 
   var EVENT_NAMES = {
-    0x80: 'EVT_STATE', 0x81: 'EVT_LEDS', 0x82: 'EVT_BATTERY', 0x83: 'EVT_PAIR_RESULT',
+    0x80: 'EVT_STATE', 0x81: 'EVT_LEDS', 0x83: 'EVT_PAIR_RESULT',
     0x84: 'EVT_ERROR', 0x85: 'EVT_TUNNEL_USB', 0x86: 'EVT_TUNNEL_BLE',
     0x87: 'EVT_HOST_POWER', 0x7F: 'EVT_PONG'
   };
@@ -126,16 +123,15 @@
   /* SET_CONFIG 键（bridge_cfg.h） */
   var CFG_KEY = {
     REPORT_PERIOD: 0x01, LOG_LEVEL: 0x02, ADV_NAME_MAC: 0x03,
-    CONN_INTERVAL: 0x04, BATTERY_SRC: 0x05, SLEEP_POLICY: 0x06
+    CONN_INTERVAL: 0x04, SLEEP_POLICY: 0x06
   };
   var CFG_KEY_NAMES = {
     0x01: 'REPORT_PERIOD', 0x02: 'LOG_LEVEL', 0x03: 'ADV_NAME_MAC',
-    0x04: 'CONN_INTERVAL', 0x05: 'BATTERY_SRC', 0x06: 'SLEEP_POLICY'
+    0x04: 'CONN_INTERVAL', 0x06: 'SLEEP_POLICY'
   };
 
-  /* 名称目标 / 电量来源 / 睡眠分级 / 睡眠策略 / 射频通道（bridge_types.h） */
+  /* 名称目标 / 睡眠分级 / 睡眠策略 / 射频通道（bridge_types.h） */
   var NAME_TARGET = { BLE: 0x00, USB: 0x01 };
-  var BATT_SRC = { AUTO: 0, LOCAL: 1, EXTERNAL: 2 };
   var SLEEP = { WAKE: 0, IDLE: 1, DEEP: 2 };
   var SLEEP_POLICY = { AUTO: 0, MANUAL: 1 };
   var RADIO = { NONE: 0, BLE: 1, '2G4': 2 };
@@ -143,7 +139,7 @@
   /* 主机电源状态（bridge_types.h：EVT_HOST_POWER / BRIDGE_RADIO_PKT_HOST） */
   var HOST = { AWAKE: 0, SUSPEND: 1 };
   var HOST_NAMES = { 0: 'AWAKE', 1: 'SUSPEND' };
-  /* 电量载荷标志位（bridge_types.h：EVT_BATTERY / CMD_SET_BATTERY 的 flags 字节） */
+  /* 电量载荷标志位（bridge_types.h：CMD_SET_BATTERY 的 flags 字节） */
   var BATT_FLAG = { CHARGING: 0x01 };
   /* 无线综合状态（bridge_types.h：CMD_GET_WIRELESS_STATE 应答单字节） */
   var WL = {
@@ -357,7 +353,7 @@
     CMD_NAMES: CMD_NAMES, EVENT_NAMES: EVENT_NAMES,
     MODE: MODE, MODE_NAMES: MODE_NAMES, MAX_BLE_PROFILE: MAX_BLE_PROFILE,
     CFG_KEY: CFG_KEY, CFG_KEY_NAMES: CFG_KEY_NAMES,
-    NAME_TARGET: NAME_TARGET, BATT_SRC: BATT_SRC, SLEEP: SLEEP,
+    NAME_TARGET: NAME_TARGET, SLEEP: SLEEP,
     SLEEP_POLICY: SLEEP_POLICY, RADIO: RADIO, RADIO_NAMES: RADIO_NAMES,
     HOST: HOST, HOST_NAMES: HOST_NAMES,
     BATT_FLAG: BATT_FLAG,
