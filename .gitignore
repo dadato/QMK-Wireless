@@ -1,0 +1,33 @@
+# build outputs
+build/
+*.o
+*.a
+*.so
+*.dll
+*.elf
+*.hex
+*.bin
+*.lst
+*.map
+
+# python caches
+__pycache__/
+*.pyc
+
+# IDE project files
+.cproject
+.project
+.settings/
+
+# local test logs / scratch
+bridge_fw/tools/logs/
+bridge_fw/tools/scratch/
+
+# vendor reference packages and tools (local downloads, not source)
+vendor/FREQCHIP/
+vendor/WCH/WCH-LinkUtility/
+vendor/WCH/WCHISPTool_CMD/
+*.zip
+*.rar
+*.pdf
+*.PDF

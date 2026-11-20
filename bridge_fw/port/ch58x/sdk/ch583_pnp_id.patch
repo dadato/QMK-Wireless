@@ -1,0 +1,30 @@
+diff --git a/EVT/EXAM/BLE/HID_Keyboard/Profile/devinfoservice.c b/EVT/EXAM/BLE/HID_Keyboard/Profile/devinfoservice.c
+index db44da6..5403db1 100644
+--- a/EVT/EXAM/BLE/HID_Keyboard/Profile/devinfoservice.c
++++ b/EVT/EXAM/BLE/HID_Keyboard/Profile/devinfoservice.c
+@@ -3,7 +3,7 @@
+  * Author             : WCH
+  * Version            : V1.0
+  * Date               : 2018/12/10
+- * Description        : �豸��Ϣ����
++ * Description        : �豸��Ϣ����
+  *********************************************************************************
+  * Copyright (c) 2021 Nanjing Qinheng Microelectronics Co., Ltd.
+  * Attention: This software (modified or not) and binary are used for 
+@@ -339,6 +339,16 @@ bStatus_t DevInfo_SetParameter(uint8_t param, uint8_t len, void *value)
+             tmos_memcpy(devInfoSystemId, value, len);
+             break;
+ 
++        /* 本工程扩展：允许运行期改写 PnP ID（VID/PID），供 CMD_SET_USB_ID 同步 BLE 标识。
++         * 主机（Windows/Chrome WebHID）在连接时读取该特征值来判定 BLE HID 的 VID/PID。 */
++        case DEVINFO_PNP_ID:
++            if (len > DEVINFO_PNP_ID_LEN)
++            {
++                len = DEVINFO_PNP_ID_LEN;
++            }
++            tmos_memcpy(devInfoPnpId, value, len);
++            break;
++
+         default:
+             ret = INVALIDPARAMETER;
+             break;
